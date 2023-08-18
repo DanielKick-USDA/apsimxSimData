@@ -1,0 +1,325 @@
+---
+title: "Untitled"
+format: html
+editor: source
+---
+
+## Functions
+
+```{r}
+devtools::load_all()
+
+library(tidyverse)
+
+# for lonlat_to_state
+library(sf)
+library(spData)
+# for geodist
+library(geodist)
+```
+
+```{r}
+cache_path <- '../data/00.01_setup_USA_env_gps_grid/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+
+
+```{r in_state}
+# Wrapper function
+in_state <- function(lon, lat){
+  res = lonlat_to_state(pointsDF = data.frame(lon = lon, lat = lat))
+  # res[is.na(res)] <- 'NA'
+  return(res)
+}
+```
+
+```{r demo check in state}
+# Demonstration: Create a grid of possible GPS points, check if they're in the US
+# step_size = -0.1
+in_gps <- data.frame(expand.grid(
+    lon = seq(-66, -125, by = -1),
+    lat = seq( 24,   50, by =  1))
+  )
+
+in_gps['state'] <- in_state(lon = in_gps$lon, lat = in_gps$lat)
+in_gps <-in_gps[!is.na(in_gps$state), ]
+
+in_gps %>% 
+  summarise(lon_min = min(lon),
+            lon_max = max(lon),
+            lat_min = min(lat),
+            lat_max = max(lat)
+            )
+
+ggplot(in_gps, aes(x = lon, y = lat, color = state))+
+  geom_point()+
+  theme_minimal()+
+  theme(legend.position = '')
+```
+
+```{r find_lon_step}
+# function to find a longitude x meters away from a position.
+find_lon_step <- function(
+  start = data.frame(lon = c(0),
+                     lat = c(0)),
+  step_m = 10000,
+  step_tol = 1,
+  max_iter = 1000
+){
+  # initialization
+  guess_under = start
+  # guess_under$lon = 0
+  guess_over = start
+  guess_over$lon = -180 
+  
+  for(i in seq(1, max_iter)){
+    # Check distance
+    guess_dist = geodist(rbind(start, guess_under, guess_over), measure = "geodesic")
+    guess_loss = guess_dist - step_m
+    
+    # threshold met?
+    tolerance = abs(guess_loss[1, ]) <= step_tol
+    if(TRUE %in% tolerance){
+      # end condition ----
+      if(1 == which.min(abs(guess_loss[1, 2:3]))){
+        return(guess_under)
+      } else {
+        return(guess_over)
+      }  
+    } else {
+      # update guess ----
+      new_lon = mean(c(guess_under$lon, guess_over$lon))
+      # replace the one with the bigger error
+      if(1 == which.max(abs(guess_loss[1, 2:3]))){
+        # replace under
+        guess_under$lon = new_lon
+      } else {
+        # replace over
+        guess_over$lon = new_lon
+      }
+    }  
+  }
+}
+
+
+
+# same function but for lat
+find_lat_step <- function(
+  start = data.frame(lon = c(0),
+                     lat = c(0)),
+  step_m = 10000,
+  step_tol = 1,
+  max_iter = 1000
+){
+  # initialization
+  guess_under = start
+  # guess_under$lat = 0 # updated  
+  guess_over = start
+  guess_over$lat = 90 # updated  
+  
+  for(i in seq(1, max_iter)){
+    # Check distance
+    guess_dist = geodist(rbind(start, guess_under, guess_over), measure = "geodesic")
+    guess_loss = guess_dist - step_m
+    
+    # threshold met?
+    tolerance = abs(guess_loss[1, ]) <= step_tol
+    if(TRUE %in% tolerance){
+      # end condition ----
+      if(1 == which.min(abs(guess_loss[1, 2:3]))){
+        return(guess_under)
+      } else {
+        return(guess_over)
+      }  
+    } else {
+      # update guess ----
+      new_lat = mean(c(guess_under$lat, guess_over$lat))
+      # replace the one with the bigger error
+      if(1 == which.max(abs(guess_loss[1, 2:3]))){
+        # replace under
+        guess_under$lat = new_lat
+      } else {
+        # replace over
+        guess_over$lat = new_lat
+      }
+    }  
+  }
+}
+
+
+
+```
+
+```{r demo finding evenly spaced lons at different lats}
+# Confirm that this is working as expected. At high latitudes the spacing evenly spaced (by meters) longitudes should have much bigger steps in lon. 
+
+low_lat <- do.call(rbind, map(0:10, function(i){
+  find_lon_step(
+    start = data.frame(
+        lon = c(0),
+        lat = c(0)),
+    step_m = i*10000,
+    step_tol = 1,
+    max_iter = 1000)}
+  ))
+
+high_lat <- do.call(rbind, map(0:10, function(i){
+  find_lon_step(
+    start = data.frame(
+        lon = c(0),
+        lat = c(80)),
+    step_m = i*10000,
+    step_tol = 1,
+    max_iter = 1000)}
+  ))
+
+low_lat['i'] <- seq(1, nrow(low_lat))
+high_lat['i'] <- seq(1, nrow(high_lat))
+
+
+rbind(low_lat, high_lat) %>% 
+  ggplot(aes(x = lon, y = lat, group = i))+
+    geom_vline(xintercept = 0, color = 'firebrick')+
+    geom_point()+
+    geom_line()+
+    theme_minimal()
+```
+
+```{r}
+lat_array <- seq(0, 80, by = 5)
+
+do.call(rbind, 
+  map(lat_array, function(ii){
+    do.call(rbind, map(0:10, function(i){
+      find_lon_step(
+        start = data.frame(
+            lon = c(0),
+            lat = c(ii)),
+        step_m = i*10000,
+        step_tol = 1,
+        max_iter = 1000)}
+      ))
+  })
+) %>% mutate(step = rep(0:10, times = length(lat_array))) %>% 
+  ggplot(aes(x = lon, y = lat, group = step))+
+    geom_vline(xintercept = 0, color = 'firebrick')+
+    geom_point(shape = 1)+
+    geom_line()+
+    theme_minimal() 
+```
+
+## Create N Hemisphere evenly spaced gps points (approximately)
+
+```{r get distances to find steps needed}
+# define a box around the US
+
+# distances of edges around US
+dist_lower = geodist(data.frame(lon = c(-124, -65),
+                                lat = c(  20,  20)), measure = "geodesic")
+ 
+dist_upper = geodist(data.frame(lon = c(-124, -65),
+                                lat = c(  49,  49)), measure = "geodesic")
+
+dist_left =  geodist(data.frame(lon = c(-124, -124),
+                                lat = c(  20,  49)), measure = "geodesic")
+
+dist_right = geodist(data.frame(lon = c(-65, -65), 
+                                lat = c(  20,  49)), measure = "geodesic")
+
+max_lon_meters <- max(max(dist_lower), max(dist_upper))
+max_lat_meters <- max(max(dist_left), max(dist_right))
+```
+
+```{r}
+save_path <- './output/gps_grid.csv'
+if(file.exists(save_path) ){
+  gps_coords <- read.csv(save_path)
+} else {
+  # fast version. Calculate only one lon step per lat and multiply out
+  
+  use_step_size = 50000 # 50km
+  use_step_tol  = use_step_size/10000
+  
+  # get ys ----
+  max_step <- ceiling(max_lat_meters/use_step_size)
+  
+  starting_latitudes <- do.call(
+    rbind, 
+    map(seq(0, max_step), 
+        function(ith_step){
+          find_lat_step(
+            start = data.frame(lon = c(-65), 
+                               lat = c(20)),
+            step_m = ith_step*use_step_size,
+            step_tol = use_step_tol,
+            max_iter = 1000
+            )}
+        )
+    )
+  
+  
+  # get grid ----
+  ## get step positions for each lat ====
+  max_step <- ceiling(max_lon_meters/use_step_size)
+  
+  gps_coords <- do.call(
+    rbind,
+    # for each latitude in starting_latitude
+    map(seq(1, nrow(starting_latitudes)), function(i){
+      ith_lat = starting_latitudes[i, 'lat']
+      ith_lon = starting_latitudes[i, 'lon'] # expected to always be 68 but extracted for form's sake.
+    
+      # use the coordinates as a starting position and find the longitudes
+      output_longitudes <- do.call(
+        rbind, 
+        map(seq(0, 1), function(ith_step){ # <- Only calculate the first step!!!
+          find_lon_step(
+            start = data.frame(lon = c(ith_lon), 
+                               lat = c(ith_lat)),
+            step_m = ith_step*use_step_size,
+            step_tol = use_step_tol,
+            max_iter = 1000
+            )})
+      )})
+    )
+  
+  ## now find distance for each lat and make grid ====
+  gps_coords['order'] = rep(c('a', 'b'), times = nrow(gps_coords)/2)
+  gps_coords <- gps_coords %>% pivot_wider(id_cols = 'lat', names_from = 'order', values_from = 'lon') %>% mutate(diff = b-a)
+  
+  # make the grid 
+  gps_coords <- do.call(rbind, 
+                        map(seq(1, nrow(gps_coords)), function(i){
+                          new_lons <- as.numeric(gps_coords[i, 'a']) + (
+                            as.numeric(gps_coords[i, 'diff']
+                                       ) * seq(0, 
+                                               ceiling(0.1/(use_step_size**-1)) # This is a clever way to get more steps when there is a smaller step size. This will prevent the distance from not shrinking too much. 
+                                               ))
+                          res <- data.frame(
+                            lon = new_lons,
+                            lat = gps_coords[i, 'lat'])
+                          
+                          res <- res[res$lon >= -180, ]
+                          res <- res[res$lat <= 90, ]
+                          
+                      return(res)                     
+                     }))
+  
+  # why is there this weird banding?
+  # once the grid is created visualize it and then filter by in us.
+  gps_coords['state'] <- in_state(lon = gps_coords$lon, lat = gps_coords$lat)
+  gps_coords <- gps_coords[!is.na(gps_coords$state),]
+  
+  write.csv(gps_coords, paste0(cache_path, 'gps_grid.csv'))  
+}
+
+print(dim(gps_coords))
+```
+
+```{r}
+ggplot(gps_coords, aes(x = lon, y = lat, color = state))+
+  geom_point()+
+  theme_minimal()+
+  theme(legend.position = '')
+```
