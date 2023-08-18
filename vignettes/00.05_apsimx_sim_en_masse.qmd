@@ -1,0 +1,549 @@
+---
+title: "00.04_apsimx_sim"
+format: html
+editor: source
+---
+
+## Setup
+
+```{r}
+library(tidyverse)
+library(apsimx)
+
+apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
+apsimx_options(examples.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\Examples')
+
+require(soilDB)
+require(sp)
+require(sf)
+require(spData)
+
+devtools::load_all()
+```
+
+```{r}
+cache_path <- '../data/00.05_apsimx_sim_en_masse/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+
+
+## Build up to running experiments from R
+
+1.  run a predefined experiment
+2.  change a predefined experiment's weather
+3.  change a predefined experiment's soil (This is more complex)
+
+### Run a multi year experiment
+```{r setup enviromental data files}
+for(lon_lat in list(c(-90.76036, 34.72952),
+                    c(-86.52960, 34.72952) )){
+  lon = lon_lat[[1]]  
+  lat = lon_lat[[2]]
+  
+  year = '1984' 
+  # 1981, 1982, 1983 Fail:Succeed 1984, 1985, 1990 # it's not just duration. 1983-1984 fails.
+  year2 = '2022' 
+  
+  met_dir = paste0(cache_path, 'power/')
+  ssurgo_dir = paste0(cache_path, 'ssurgo/')
+  planting_date = '1-Apr'
+  cultivar = 'A_80'
+  base_file = "BasicSimulation.apsimx"
+  
+  
+  # Make sure there's weather data to use
+  daterange = c(paste0(year, '-01-01'), paste0(year2, '-12-31'))
+  
+  try(
+    cache_apsimx_power(
+      lonlat = c(lon, lat),
+      dates = daterange,
+      dir_path = met_dir,
+      force = FALSE,
+      delay = 0
+    )
+  )
+  
+  met_file <- paste(lon, '_', lat, '_', daterange[1], '_', daterange[2], '.met', sep = '')
+  
+  # Lookup ssurgo data
+  try( # This is in case lon/lats are passed in that are not in the database. The model is not run if the files don't exist so this a way of preventing a batch download through a loop from terminating early.
+    cache_apsimx_ssurgo(
+      lonlat = c(lon, lat),
+      dir_path = ssurgo_dir,
+      force = FALSE,
+      delay = 0 # add courtesy delay if batch downloading.
+    )
+  )
+  
+  ssurgo_file <- paste(lon, '_', lat, '.RDS', sep = '')
+  print(met_file)
+  print(ssurgo_file)
+  
+}
+```
+
+#### Begin by setting up the outputs for a regression test
+```{r}
+# Basic 
+## Iowa Soil + Weather from (-90.76036, 34.72952)
+basic_n90_34 = apsimx(
+    file = "SimulateBasic_-90_34.apsimx",
+    src.dir = "../data/00.05_apsimx_sim_en_masse/",
+    value = "report")
+
+## Iowa Soil + Weather from (-86.52960, 34.72952)
+basic_n86_34 = apsimx(
+    file = "SimulateBasic_-86_34.apsimx",
+    src.dir = "../data/00.05_apsimx_sim_en_masse/",
+    value = "report")
+
+
+# Factorial Experiment
+## Iowa Soil + Weather from (-90.76036, 34.72952)
+fact_n90_34 = apsimx(
+    file = "SimulateFactorial_-90_34.apsimx",
+    src.dir = "../data/00.05_apsimx_sim_en_masse/",
+    value = "report")
+
+## Iowa Soil + Weather from (-86.52960, 34.72952)
+fact_n86_34 = apsimx(
+    file = "SimulateFactorial_-86_34.apsimx",
+    src.dir = "../data/00.05_apsimx_sim_en_masse/",
+    value = "report")
+```
+
+```{r}
+basic_sims <- rbind(
+  mutate(basic_n90_34, met = '-90_34'), 
+  mutate(basic_n86_34, met = '-86_34')) %>% 
+  as_tibble()
+
+ggplot(basic_sims, aes(x = Date, y = yield_Kgha))+
+  geom_point()+
+  facet_grid(.~met)
+```
+
+
+```{r}
+fact_sims <- rbind(
+  mutate(fact_n90_34, met = '-90_34'), 
+  mutate(fact_n86_34, met = '-86_34')) %>% 
+  as_tibble()
+
+ggplot(fact_sims, aes(x = Date, y = yield_Kgha, color = Genotype, group = SowDate))+
+  geom_point()+
+  facet_grid(.~met)
+```
+
+## Regression Test 1: Change basic simulation's weather 
+```{r}
+base_file = "SimulateBasic_-90_34.apsimx"
+use_src.dir = "../data/00.05_apsimx_sim_en_masse/" 
+# NOTE this path has to be relative to the saved file not the pwd
+met_path =    './power/-86.5296_34.72952_1984-01-01_2022-12-31.met' 
+
+edit_tag = '-temp'
+temp_file <- paste0(str_replace(base_file, '\\.apsimx$', ''), edit_tag, '.apsimx')
+
+# Make edits ----
+## Weather ====
+edit_apsimx(
+  file = base_file,
+  src.dir = use_src.dir,
+  node = 'Weather',
+  value = met_path,
+  edit.tag = edit_tag
+)
+
+# Run Simulation ----
+res = apsimx(
+  file = temp_file,
+  src.dir = use_src.dir,
+  value = "report")
+# remove temp file
+unlink(paste0(use_src.dir, temp_file))
+
+ggplot(basic_sims, aes(x = Date, y = yield_Kgha))+
+  geom_point()+
+  geom_point(data = res, color = 'red')+
+  facet_grid(.~met)+
+  labs(title = 'Expect overlap with -86_34')
+```
+
+## Regression Test 2: Change basic simulation's soil 
+```{r}
+base_file = "SimulateBasic_-90_34.apsimx"
+use_src.dir = "../data/00.05_apsimx_sim_en_masse/"
+# NOTE unlike the met file above since the data is passed in through R the path is relative to the pwd
+ssurgo_path = '../data/00.05_apsimx_sim_en_masse/ssurgo/-86.5296_34.72952.RDS'
+
+edit_tag = '-temp'
+temp_file <- paste0(str_replace(base_file, '\\.apsimx$', ''), edit_tag, '.apsimx')
+
+# Make edits ----
+## Soil ====
+surgo_dat <- readRDS(ssurgo_path)
+
+edit_apsimx_replace_soil_profile(
+  file = base_file,
+  src.dir = use_src.dir,
+  soil.profile = surgo_dat[[1]],
+  edit.tag = edit_tag
+)
+
+# Run Simulation ----
+res = apsimx(
+  file = temp_file,
+  src.dir = use_src.dir,
+  value = "report")
+# remove temp file
+unlink(paste0(use_src.dir, temp_file))
+
+ggplot(basic_sims, aes(x = Date, y = yield_Kgha))+
+  geom_point()+
+  geom_point(data = res, color = 'red')+
+  facet_grid(.~met)+
+  labs(title = 'Expect overlap with neither')
+```
+
+
+## Regression Test 3: Change factorial experiment's weather 
+```{r}
+# the hacky way to do this is to ignore the apsimx functions and go directly to the json. 
+# the even more hacky way to do this is to edit the relevant line/s based on what the base file's met is known to be.
+expect_met = '-90.76036_34.72952_1984-01-01_2022-12-31.met'
+replace_met = '-86.5296_34.72952_1984-01-01_2022-12-31.met'
+res <- read_file("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34.apsimx")
+res <- unlist(str_split(res, '\\n'))
+
+
+mask <- str_detect(string = res, expect_met)
+
+relevant_line <- res[mask]
+print(length(relevant_line) == 1)
+
+replacement_line <- str_replace(relevant_line, pattern = expect_met, replacement = replace_met)
+res[mask] <- replacement_line
+res <- paste(res, collapse = '\n')
+write_file(res, "../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-temp.apsimx")
+
+
+
+# test
+res = apsimx(
+  file = 'SimulateFactorial_-90_34-temp.apsimx',
+  src.dir = use_src.dir,
+  value = "report")
+
+unlink("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-temp.apsimx")
+
+ggplot(fact_sims, aes(x = Date, y = yield_Kgha, color = Genotype, group = SowDate))+
+  geom_point()+
+  geom_point(data = res, color = 'red')+
+  facet_grid(.~met)+
+  labs(title = 'Expect overlap with -86_34')
+```
+
+
+```{r}
+# file.copy("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34.apsimx",
+#           "../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-temp.apsimx")
+# 
+# edit_apsimx_replace_soil_profile(  
+#   'SimulateFactorial_-90_34.apsimx', 
+#   src.dir = '../data/00.05_apsimx_sim_en_masse',
+#   soil.profile = surgo_dat[[1]],
+#   edit.tag = edit_tag
+# )
+# 
+# res = apsimx(
+#   file = 'SimulateFactorial_-90_34-temp.apsimx',
+#   src.dir = use_src.dir,
+#   value = "report")
+# 
+# 
+# res
+# 
+# 
+# 
+# inspect_apsimx_replacement(
+#   'SimulateFactorial_-90_34-temp.apsimx', 
+#   src.dir = '../data/00.05_apsimx_sim_en_masse',
+#   root = list("Experiment1"), 
+#   node = 'Experiment',
+#   node.child = 'ExperimentBase',
+#   node.subchild = 'Weather')
+# 
+# inspect_apsimx(
+#   'SimulateFactorial_-90_34-temp.apsimx', 
+#   src.dir = '../data/00.05_apsimx_sim_en_masse',
+#   root = list("Experiment1", 'Experiment', 'ExperimentBase'),
+#   node = "Weather")
+# 
+# inspect_apsimx(
+#   'SimulateFactorial_-90_34-temp.apsimx', 
+#   src.dir = '../data/00.05_apsimx_sim_en_masse',
+#   root = list("Experiment1", 'Experiment', 'ExperimentBase'),
+#   node = 'Weather'
+#   )
+# 
+# 
+# 
+# edit_apsimx('SimulateFactorial_-90_34-temp.apsimx',
+#             src.dir = '../data/00.05_apsimx_sim_en_masse', 
+#             wrt.dir = '../data/00.05_apsimx_sim_en_masse',
+#             root = list("Experiment1", 'Experiment', 'ExperimentBase'),
+#             node = 'Weather',
+#             
+#             value = "Ames.met",
+#             overwrite = TRUE)
+# 
+# 
+# 
+# # edit_apsimx("Factorial.apsimx", 
+# #             src.dir = extd.dir, wrt.dir = tmp.dir,
+# #             root = c("RangeExperiment", "Base2"),
+# #             node = "Weather", 
+# #             value = "Ames.met")
+
+```
+
+```{r}
+
+# 
+# # file.copy("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34.apsimx",
+# #           "../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-temp.apsimx")
+# 
+# library(jsonlite)
+# # jsonlite::read_json('./BasicSimulation-demo-experiment.apsimx')
+# 
+# raw_json <- jsonlite::read_json("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34.apsimx")
+# 
+# # horribly, this path is something that would need to be set _every_ time the base experiment file changes.
+# # str(raw_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[2]]$FileName, max.level = 2)
+# current_met_value <- raw_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[2]]$FileName
+# current_met_value <- unlist(str_split(current_met_value, pattern = '\\\\'))
+# 
+# current_met_value[length(current_met_value)] <- '-86.5296_34.72952_1984-01-01_2022-12-31.met'
+# 
+# new_met_value <- paste(current_met_value, collapse = '\\')
+# 
+# raw_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[2]]$FileName <- new_met_value
+# 
+# 
+# 
+# jsonlite::write_json(x = raw_json, '../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-temp.apsimx')
+# 
+# 
+# 
+# res = apsimx(
+#   file = 'SimulateFactorial_-90_34-temp.apsimx',
+#   src.dir = use_src.dir,
+#   value = "report")
+# 
+# unlink("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-temp.apsimx")
+# 
+# # without changes will overlap with -90_34
+# # looks like these are the same...
+# ggplot(fact_sims[fact_sims$met == '-90_34',], aes(x = Date, y = yield_Kgha, color = Genotype, group = SowDate))+
+#   geom_point()+
+#   geom_point(data = res, shape = 1, color = 'red')+
+#   facet_grid(.~met)
+```
+
+
+
+## Regression Test 4: Change factorial experiment's soil
+```{r}
+      # # use diff relative to iowa to find the lines that need to be changed!!
+      # 
+      # # From above -- make file with desired soil.
+      # base_file = "SimulateBasic_-90_34.apsimx"
+      # use_src.dir = "../data/00.05_apsimx_sim_en_masse/"
+      # ssurgo_path = '../data/00.05_apsimx_sim_en_masse/ssurgo/-86.5296_34.72952.RDS'
+      # 
+      # edit_tag = '-temp'
+      # temp_file <- paste0(str_replace(base_file, '\\.apsimx$', ''), edit_tag, '.apsimx')
+      # 
+      # # Make edits ----
+      # ## Soil ====
+      # surgo_dat <- readRDS(ssurgo_path)
+      # 
+      # edit_apsimx_replace_soil_profile(
+      #   file = base_file,
+      #   src.dir = use_src.dir,
+      #   soil.profile = surgo_dat[[1]],
+      #   edit.tag = edit_tag
+      # )
+      # 
+      # # Read in the files under consideration 
+      # simBase_text <- read_file(paste0(use_src.dir, base_file))
+      # simAlt_text <- read_file(paste0(use_src.dir, temp_file))
+      # simFact_text <- read_file("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34.apsimx")
+      # 
+      # # now remove it.
+      # unlink(paste0(use_src.dir, temp_file))
+      # 
+      # 
+      # files_text <- list('base'= simBase_text, 
+      #                    'alt' = simAlt_text,
+      #                    'fact'= simFact_text)
+      # 
+      # # maybe I can (fake) diff the json easier than the text ... if it has the same number of entries in both
+      # files_text <- map(files_text, function(e){unlist(str_split(e, '\\n'))})
+
+
+```
+
+
+
+
+
+
+
+
+Make a simple file with the soil data I want to use. 
+```{r}
+base_file = "SimulateBasic_-90_34.apsimx"
+use_src.dir = "../data/00.05_apsimx_sim_en_masse/"
+ssurgo_path = '../data/00.05_apsimx_sim_en_masse/ssurgo/-86.5296_34.72952.RDS'
+
+edit_tag = '_soil_-86_34'
+temp_file <- paste0(str_replace(base_file, '\\.apsimx$', ''), edit_tag, '.apsimx')
+
+# Make edits ----
+## Soil ====
+surgo_dat <- readRDS(ssurgo_path)
+
+edit_apsimx_replace_soil_profile(
+  file = base_file,
+  src.dir = use_src.dir,
+  soil.profile = surgo_dat[[1]],
+  edit.tag = edit_tag
+)
+
+# I manually copied the soil from this one into SimulateFactorial_-90_34_soil_-86_34.apsimx which began as SimulateFactorial_-90_34.apsimx
+```
+
+
+
+
+
+
+```{r}
+# The files I need to compare are 
+
+jsons <- map(paste0(use_src.dir, c(
+  "SimulateBasic_-90_34.apsimx",
+  "SimulateBasic_-90_34_soil_-86_34.apsimx",
+  "SimulateFactorial_-90_34.apsimx",
+  "SimulateFactorial_-90_34_soil_-86_34.apsimx")), 
+  function(e){jsonlite::read_json(e)})
+```
+
+
+```{r}
+json1 <- jsons[[1]]
+json2 <- jsons[[2]]
+
+# Where in the basic json is the soil information?
+
+# I think this might be the right node. 
+json1$Children[[2]]$Children[[5]] %>% names() # maybe run a check on names?
+json1$Children[[2]]$Children[[5]] <- json2$Children[[2]]$Children[[5]] 
+
+# write out and diff 
+
+jsonlite::write_json(json2, 
+                     "../data/00.05_apsimx_sim_en_masse/SimulateBasic_-90_34-check-soil.apsimx",
+                     pretty = TRUE, 
+                     digits = NA, auto_unbox = TRUE, null = "null", 
+                     na = "null")
+
+# looking at a diff, vs "SimulateBasic_-90_34_soil_-86_34.apsimx" it seems that one is storing numbers as floats while the other is using ints
+```
+
+Regression test
+```{r}
+reg_test <- map(c(
+  "SimulateBasic_-90_34.apsimx",
+  "SimulateBasic_-90_34_soil_-86_34.apsimx",
+  "SimulateBasic_-90_34-check-soil.apsimx"), function(e){
+        res = apsimx(
+          file = e,
+          src.dir = "../data/00.05_apsimx_sim_en_masse/",
+          value = "report")
+        
+        res['file']<-e
+        return(res)
+        
+      })
+reg_test <- do.call(rbind, reg_test)
+
+ggplot(reg_test[reg_test$file != "SimulateBasic_-90_34-check-soil.apsimx",], 
+       aes(x = Date, y = yield_Kgha))+
+  geom_point()+
+  geom_point(data = mutate(reg_test[reg_test$file == "SimulateBasic_-90_34-check-soil.apsimx",], 
+                           file = "SimulateBasic_-90_34_soil_-86_34.apsimx"), 
+             color = 'red', shape = 1)+
+  facet_grid(.~file)+
+  labs(title = 'Expect overlap with SimulateBasic_-90_34_soil_-86_34.apsimx')
+
+
+```
+
+So I can replace soil by node, in the json file. Now I need to do the same in the factorial.
+```{r}
+json3 <- jsons[[3]]
+
+# this looks like the soil path for a factorial
+json3$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]] %>% str(max.level = 2)
+
+# overwrite with the values from json2
+json3$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]] <- json2$Children[[2]]$Children[[5]] 
+
+jsonlite::write_json(json3, 
+                     "../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-check-soil.apsimx",
+                     pretty = TRUE, 
+                     digits = NA, auto_unbox = TRUE, null = "null", 
+                     na = "null")
+
+```
+
+
+```{r}
+reg_test <- map(c(
+  "SimulateFactorial_-90_34.apsimx",
+  "SimulateFactorial_-90_34_soil_-86_34.apsimx",
+  "SimulateFactorial_-90_34-check-soil.apsimx"), function(e){
+        res = apsimx(
+          file = e,
+          src.dir = "../data/00.05_apsimx_sim_en_masse/",
+          value = "report")
+        
+        res['file']<-e
+        return(res)
+        
+      })
+reg_test <- do.call(rbind, reg_test)
+
+ggplot(reg_test[reg_test$file != "SimulateFactorial_-90_34-check-soil.apsimx",], 
+       aes(x = Date, y = yield_Kgha))+
+  geom_point()+
+  geom_point(data = mutate(reg_test[reg_test$file == "SimulateFactorial_-90_34-check-soil.apsimx",], 
+                           file = "SimulateFactorial_-90_34_soil_-86_34.apsimx"), 
+             color = 'red', shape = 1)+
+  facet_grid(.~file)+
+  labs(title = 'Expect overlap with SimulateFactorial_-90_34_soil_-86_34.apsimx')
+```
+
+Clean up directory
+```{r}
+unlink("../data/00.05_apsimx_sim_en_masse/SimulateBasic_-90_34_soil_-86_34.apsimx")
+unlink("../data/00.05_apsimx_sim_en_masse/SimulateBasic_-90_34-check-soil.apsimx")
+unlink("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-check-soil.apsimx")
+```
+
+
