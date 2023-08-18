@@ -1,0 +1,116 @@
+---
+title: "Untitled"
+format: html
+editor: source
+---
+
+## 
+
+```{r}
+library(tidyverse)
+
+g2f_cache_path = './data/00.04_apsimx_sim/g2f_cache/'
+
+
+res <- do.call(rbind, map(list.files(g2f_cache_path), function(e){
+  res <- read.csv(paste0(g2f_cache_path, e))
+}))
+
+
+```
+
+```{r}
+res_backup <- res
+res <- res_backup
+
+res <- res  %>% 
+  # filter(yield_Kgha > 0) %>% # leave zeros to prevent animation from moving dots instead of fading in/out?
+  mutate(yield_Mgha = yield_Kgha/1000)
+
+
+```
+
+```{r}
+
+res <-
+  res %>% 
+  separate(planting_date, c('day', 'month')) %>% 
+  mutate(day = as.character(as.numeric(day)),
+    month = case_when(
+    month == "Jan" ~ 1,
+    month == "Feb" ~ 2,
+    month == "Mar" ~ 3,
+    month == "Apr" ~ 4,
+    month == "May" ~ 5,
+    month == "Jun" ~ 6,
+    month == "Jul" ~ 7,
+    month == "Aug" ~ 8,
+    month == "Sep" ~ 9,
+    month == "Oct" ~ 10,
+    month == "Nov" ~ 11,
+    month == "Dec" ~ 12)) %>% 
+  mutate(year_backup = year) %>% 
+  mutate(year_start= year, first_day = '-01-01') %>%
+  unite(year_start, c('year_start', 'first_day'), sep = '') %>%
+  mutate(year_start = lubridate::as_date(year_start)) %>% 
+  unite(ymd, c('year', 'month', 'day'), sep = '-') %>%
+  mutate(ymd = lubridate::as_date(ymd)) %>% 
+  mutate(diff = ymd - year_start) %>% 
+  rename(year = year_backup) %>% 
+  select(-ymd, -year_start)
+```
+
+
+```{r}
+res %>% 
+  mutate(diff = as.numeric(diff)) %>% 
+  filter(year == 2022) %>% 
+  ggplot(aes(x = diff, y = yield_Mgha, 
+             group = interaction(lon, lat), color = year))+
+  geom_line()+
+  geom_point()
+```
+
+
+```{r}
+# load United States state map data
+MainStates <- map_data("state")
+
+
+library(gganimate)
+
+# res <- res[res$year == 2022, ]
+
+# for plot sites 
+just_gps <- res
+just_gps <- just_gps %>%
+  select(lon, lat, year) %>% 
+  distinct()
+
+
+my_gif <- ggplot() +
+  geom_polygon( data=MainStates, aes(x=long, y=lat, group=group),
+                color="black", fill="white" )+
+  geom_point(data = just_gps, aes(x = lon, y = lat, group = interaction(lon, lat)), size = 2, shape = 1, color = 'black')+
+  geom_point(data = res, aes(x = lon, y = lat, color = yield_Mgha, group = interaction(lon, lat)), size = 2)+
+  theme_void()+
+  scale_color_viridis_c()+
+  theme(legend.position = 'bottom' )+
+  facet_wrap(~year)+
+  
+  labs(title = 'Planting DOY: {closest_state}') +
+  # transition_time(diff) +
+  # ease_aes('linear')
+  
+  transition_states(
+    diff,
+    transition_length = 1,
+    state_length = 1
+  ) +
+  ease_aes('linear')
+
+my_gif
+
+anim_save('./demogif.gif', animation = my_gif)
+```
+
