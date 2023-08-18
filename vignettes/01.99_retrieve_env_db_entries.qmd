@@ -1,0 +1,171 @@
+---
+title: 01.03_retrieve_env_db_entries
+format: html
+editor: source
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .qmd
+      format_name: quarto
+      format_version: '1.0'
+      jupytext_version: 1.14.4
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+## 
+
+```{r}
+library(tidyverse)
+library(apsimx)
+require(soilDB)
+require(sp)
+require(sf)
+require(spData)
+
+# R version of the same functions in my python nbs
+ensure_dir_path_exists <- function(
+    dir_path # path to create if it doesn't already exist. 
+){
+  if (dir.exists(dir_path)){
+    # do nothing
+  } else {
+    dir.create(dir_path, recursive = T)
+  }
+}
+```
+
+```{r}
+# Note: This path should be updated and/or apsimNG should be containerized.
+# apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
+
+# originally from 'EnvDL/notebook_artifacts/01.02_g2fc_imputation/gps_coords.csv'
+gps <- read.csv('./ext_data/gps_coords.csv')
+
+
+cache_apsimx_ssurgo <- function(
+    lonlat = c(-93.4345, 42.049),
+    dir_path = '../data/env_data/apsimx_ssurgo', 
+    force = FALSE,
+    delay = 0 # add courtesy delay if batch downloading. 
+    ){
+  ensure_dir_path_exists(dir_path = dir_path)
+  save_name <- paste(c(paste(lonlat, collapse = '_'), '.RDS'), collapse = '')
+  save_path <- paste(dir_path, save_name, sep = '/')
+  # make sure the coordinates are within usa (otherwise ssurgo won't have them)
+
+  # if(!((-125 < lonlat[1]) & (lonlat[1] < -65.5))){
+  #   print(paste('Longitude out of range. Skipping ', paste(lonlat, collapse = ', '), '.', sep = ''))  
+  # } else if(!((24   < lonlat[2]) & (lonlat[2] <  42.25))){
+  #   print(paste('Latitude out of range. Skipping ', paste(lonlat, collapse = ', '), '.', sep = ''))  
+  # } else 
+  if( !file.exists(save_path) ){
+    # Check if file exists or should be downloaded
+    Sys.sleep(delay)
+    surgo_profile <- get_ssurgo_soil_profile(lonlat = lonlat)
+    saveRDS(surgo_profile, file = save_path)
+  }
+}
+
+
+walk(seq(1, nrow(gps)), function(i){
+  if(!stringr::str_detect(gps[i, 'Env'], '^GEH.+') & # Germany
+     !stringr::str_detect(gps[i, 'Env'], '^ONH.+')   # Ontario
+     
+     
+   ){
+    cache_apsimx_ssurgo(
+      lonlat = unlist(gps[i, c('Longitude_of_Field', 'Latitude_of_Field')]),
+      dir_path = '../data/env_data/apsimx_ssurgo',
+      force = FALSE,
+      delay = 0 # add courtesy delay if batch downloading.
+      )
+  }
+  
+  })
+
+```
+
+## Download weather datasets
+
+### daymet
+```{r}
+require(daymetr)
+
+cache_apsimx_daymet <- function(
+    lonlat = c(-93.4345, 42.049),
+    years = c(2013, 2013),
+    dir_path = '../data/env_data/apsimx_daymet', 
+    force = FALSE,
+    delay = 0 # add courtesy delay if batch downloading. 
+    ){
+  ensure_dir_path_exists(dir_path = dir_path)
+  save_name <- paste(c(paste(c(lonlat, years), collapse = '_'), '.met'), collapse = '')
+  
+  save_path <- paste(dir_path, save_name, sep = '/')
+  if( !file.exists(save_path) ){
+    Sys.sleep(delay)
+    get_daymet2_apsim_met(
+      lonlat = lonlat, 
+      years = years, 
+      wrt.dir = dir_path, 
+      filename = save_name
+      )
+  }
+}
+
+cache_apsimx_daymet()
+
+
+
+```
+
+### power
+
+```{r}
+require(nasapower)
+
+cache_apsimx_power <- function(
+    lonlat = c(-93.4345, 42.049),
+    dates = c('2013-01-01', '2013-12-31'),
+    dir_path = '../data/env_data/apsimx_power', 
+    force = FALSE,
+    delay = 0 # add courtesy delay if batch downloading. 
+    ){
+  ensure_dir_path_exists(dir_path = dir_path)
+  save_name <- paste(c(paste(c(lonlat, dates), collapse = '_'), '.met'), collapse = '')
+  
+  save_path <- paste(dir_path, save_name, sep = '/')
+  if( !file.exists(save_path) ){
+    Sys.sleep(delay)
+    get_power_apsim_met(
+      lonlat = lonlat, 
+      dates = dates, 
+      wrt.dir = dir_path, 
+      filename = save_name
+      )
+  }
+}
+
+cache_apsimx_power()
+
+```
+
+
+
+
+
+```{r}
+i = 34
+
+  cache_apsimx_ssurgo(
+    lonlat = unlist(gps[i, c('Longitude_of_Field', 'Latitude_of_Field')]),
+    dir_path = '../data/env_data/apsimx_ssurgo', 
+    force = FALSE,
+    delay = 1 # add courtesy delay if batch downloading. 
+    )
+  
+
+```

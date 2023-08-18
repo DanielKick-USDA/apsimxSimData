@@ -1,0 +1,657 @@
+---
+title: "Untitled"
+format: html
+editor: source
+---
+
+## Setup
+
+```{r}
+library(tidyverse)
+library(apsimx)
+
+apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
+apsimx_options(examples.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\Examples')
+```
+
+## Tutorial sim (queensland)
+
+```{r, eval = F}
+# maize <- apsimx_example("Maize")
+# 
+# extd.dir <- system.file("extdata", package = "apsimx")
+# # inspect_apsimx("Maize.apsimx", src.dir = extd.dir, node = "Weather")
+# # 
+# # inspect_apsimx("Maize.apsimx", src.dir = extd.dir, 
+# #                node = "Soil", soil.child = "Organic")
+# # 
+# 
+# # replacement organic carbon
+# ocs <- c(1.5, 1.4, 1.3, 1.2, 1.1, 1.0, 0.9)
+# edit_apsimx("Maize.apsimx",
+#             src.dir = extd.dir,
+#             wrt.dir = ".",
+#             node = "Soil",
+#             soil.child = "Organic",
+#             parm = "Carbon", value = ocs)
+# 
+# # inspect_apsimx("Maize-edited.apsimx", src.dir = ".",
+# #                node = "Soil", soil.child = "Organic")
+# 
+# 
+# 
+# maize_result = apsimx(
+#   file = "Maize-edited.apsimx", # cannot be  the path
+#   value = "report")
+# 
+# 
+# ggplot(data = maize_result , 
+#        aes(x = Date, y = Maize.Grain.Wt)) + 
+#   geom_line()+
+#   geom_point()+
+#   theme_light()
+```
+
+## Working with FirstSimulation
+
+```{r}
+maize_result_1 = apsimx(
+  file = "FirstSimulation.apsimx", # cannot be  the path
+  value = "report")
+
+# for ploting multiples
+maize_result_1$Sim = 'Original'
+
+ggplot(data = maize_result_1, aes(x = Date, y = yield_Kgha)) + 
+  geom_line()+
+  geom_point()+
+  theme_light()
+```
+
+Inspect the soil profile that I want to change.
+
+```{r}
+inspect_apsimx("FirstSimulation.apsimx", src.dir = ".",
+               node = "Soil"
+               # , soil.child = "Organic"
+               )
+```
+
+
+## Swap soil parameters
+
+
+```{r}
+require(soilDB)
+require(sp)
+require(sf)
+require(spData)
+
+# Get Iowan soil at lat 42.049, lon -93.4345 (should be similar to the existing entry)
+surgo_dat <- get_ssurgo_soil_profile(lonlat = c(-93.4345, 42.049))
+
+edit_apsimx_replace_soil_profile(
+  file = "FirstSimulation.apsimx",
+  src.dir = ".",
+  soil.profile = surgo_dat[[1]], 
+  edit.tag = "-2",
+)
+
+maize_result_2 = apsimx(
+  file = "FirstSimulation-2.apsimx", # cannot be  the path
+  value = "report")
+
+
+maize_result_2$Sim = 'Iowa SSURGO'
+
+
+
+# Columbia MO
+como_lonlat <- c(-92.328636, 38.951561)
+surgo_dat <- get_ssurgo_soil_profile(lonlat = como_lonlat)
+
+edit_apsimx_replace_soil_profile(
+  file = "FirstSimulation.apsimx",
+  src.dir = ".",
+  soil.profile = surgo_dat[[1]], 
+  edit.tag = "-3",
+)
+
+maize_result_3 = apsimx(
+  file = "FirstSimulation-3.apsimx", # cannot be  the path
+  value = "report")
+
+
+maize_result_3$Sim = 'COMO SSURGO'
+
+
+M <- do.call(rbind, list(maize_result_1, maize_result_2, maize_result_3))
+ggplot(data = M, aes(x = Date, y = yield_Kgha, color = Sim)) + 
+  geom_line()+
+  geom_point()+
+  theme_light()+
+  scale_color_manual(values = c('cornflowerblue', 'DarkGray', 'Black'))
+```
+
+```{r}
+# # global # get_isric_soil_profile # wip
+# 
+# 
+# # get_ssurgo_soil_profile() # list with obj of class soil_profile
+# 
+# 
+# require(soilDB)
+# require(sp)
+# require(sf)
+# require(spData)
+# 
+# # maybe faster way to do this:
+# # get_ssurgo_soil_profile(lonlat = c(-93.4345, 42.049))
+# 
+# asp1.c <- get_ssurgo_soil_profile(lonlat = c(-93.4345, 42.049))
+# 
+# edit_apsimx_replace_soil_profile(
+#   file = "Maize-edited.apsimx",
+#   src.dir = ".",
+#   soil.profile = asp1.c[[1]], # amusingly this requires selection as the first entry. I suppose get_ssurgo_soil_profile may be able to handle a list of requests?
+#   edit.tag = "-soilReplaced1",
+# )
+# 
+# maize_result_2 = apsimx(
+#   file = "Maize-edited-soilReplaced1.apsimx", # cannot be  the path
+#   value = "report")
+# 
+# 
+# ggplot(data = maize_result , 
+#        aes(x = Date, y = Maize.Grain.Wt)) + 
+#   geom_line()+
+#   geom_point()+
+#   theme_light()
+# 
+# 
+# 
+# 
+# 
+# stbls <- get_ssurgo_tables(lonlat = c(-93.4345, 42.049))
+# 
+# sp2.c <- ssurgo2sp(mapunit = stbls$mapunit, 
+#                  component = stbls$component, 
+#                  chorizon = stbls$chorizon, 
+#                  mapunit.shp = stbls$mapunit.shp)  
+# names(sp2.c)
+# 
+# metadata <- attributes(sp2.c[[1]])
+# metadata$names <- NULL; metadata$class <- NULL; metadata$row.names <- NULL
+# 
+# ## Convert to an APSIM soil profile
+# asp2.c <- apsimx_soil_profile(nlayers = 10,
+#                               Thickness = sp2.c[[1]]$Thickness * 10,
+#                               BD = sp2.c[[1]]$BD,
+#                               AirDry = sp2.c[[1]]$AirDry,
+#                               LL15 = sp2.c[[1]]$LL15,
+#                               DUL = sp2.c[[1]]$DUL,
+#                               SAT = sp2.c[[1]]$SAT,
+#                               KS = sp2.c[[1]]$KS,
+#                               Carbon = sp2.c[[1]]$Carbon,
+#                               PH = sp2.c[[1]]$PH,
+#                               ParticleSizeClay = sp2.c[[1]]$ParticleSizeClay,
+#                               ParticleSizeSilt = sp2.c[[1]]$ParticleSizeSilt,
+#                               ParticleSizeSand = sp2.c[[1]]$ParticleSizeSand,
+#                               metadata = metadata)
+#                               
+# 
+# edit_apsimx_replace_soil_profile(
+#   file = "Maize-edited.apsimx",
+#   src.dir = ".",
+#   soil.profile = asp2.c,
+#   edit.tag = "-soilReplaced2",
+# )
+# 
+# maize_result_3 = apsimx(
+#   file = "Maize-edited-soilReplaced2.apsimx", # cannot be  the path
+#   value = "report")
+# 
+# 
+# 
+# 
+# 
+# inspect_apsimx("Maize-edited.apsimx", src.dir = tmp.dir,
+#                  node = "Soil"
+```
+
+## Modify weather 
+
+```{r}
+ensure_dir_path_exists <- function(
+    dir_path
+){
+  if (dir.exists(dir_path)){
+    # do nothing
+  } else {
+    dir.create(dir_path, recursive = T)
+  }
+}
+
+require(daymetr)
+cache_apsimx_daymet <- function(
+    lonlat = c(-93.4345, 42.049),
+    years = c(2013, 2013),
+    dir_path = './daymet', 
+    force = FALSE,
+    delay = 0 
+    ){
+  ensure_dir_path_exists(dir_path = dir_path)
+  save_name <- paste(c(paste(c(lonlat, years), collapse = '_'), '.met'), collapse = '')
+  
+  save_path <- paste(dir_path, save_name, sep = '/')
+  if( !file.exists(save_path) ){
+    Sys.sleep(delay)
+    get_daymet2_apsim_met(
+      lonlat = lonlat, 
+      years = years, 
+      wrt.dir = dir_path, 
+      filename = save_name
+      )
+  }
+}
+
+require(nasapower)
+cache_apsimx_power <- function(
+    lonlat = c(-93.4345, 42.049),
+    dates = c('2013-01-01', '2013-12-31'),
+    dir_path = './power', 
+    force = FALSE,
+    delay = 0 
+    ){
+  ensure_dir_path_exists(dir_path = dir_path)
+  save_name <- paste(c(paste(c(lonlat, dates), collapse = '_'), '.met'), collapse = '')
+  
+  save_path <- paste(dir_path, save_name, sep = '/')
+  if( !file.exists(save_path) ){
+    Sys.sleep(delay)
+    get_power_apsim_met(
+      lonlat = lonlat, 
+      dates = dates, 
+      wrt.dir = dir_path, 
+      filename = save_name
+      )
+  }
+}
+
+
+## NASA POWER ====
+
+cache_apsimx_power(
+  lonlat = como_lonlat,
+  dates = c('2013-01-01', '2013-12-31')
+  )
+
+# -92.328636_38.951561_2013-01-01_2013-12-31.met
+
+
+inspect_apsimx(file = 'FirstSimulation-3.apsimx',
+              node = 'Weather')
+
+edit_apsimx(
+  file = "FirstSimulation-3.apsimx",
+  src.dir = ".",
+  node = 'Weather', 
+  value = './power/-92.328636_38.951561_2013-01-01_2013-12-31.met',
+  edit.tag = ".power",
+)
+
+edit_apsimx(
+  file = "FirstSimulation-3.power.apsimx",
+  src.dir = ".",
+  node = 'Clock', 
+  parm = 'Start',
+  value = '2013-01-01T00:00:00',
+  overwrite = TRUE,
+  # edit.tag = '.2'
+)
+
+edit_apsimx(
+  file = "FirstSimulation-3.power.apsimx",
+  src.dir = ".",
+  node = 'Clock', 
+  parm = 'End',
+  value = '2014-01-01T00:00:00',
+  overwrite = TRUE
+)
+
+inspect_apsimx(file = 'FirstSimulation-3.power.apsimx',
+              node = 'Clock',
+              parm = 'Start'
+              )
+
+
+
+maize_result_4 = apsimx(
+  file = "FirstSimulation-3.power.apsimx",
+  value = "report")
+
+maize_result_4$Sim = 'COMO SSURGO POWER'
+
+
+## ONRL DAYMET ====
+
+cache_apsimx_daymet(
+  lonlat = como_lonlat,
+  years = c(2013, 2013)
+)
+
+# -92.328636_38.951561_2013_2013.met
+
+edit_apsimx(
+  file = "FirstSimulation-3.apsimx",
+  src.dir = ".",
+  node = 'Weather', 
+  value = './daymet/-92.328636_38.951561_2013_2013.met',
+  edit.tag = ".daymet",
+)
+
+edit_apsimx(
+  file = "FirstSimulation-3.daymet.apsimx",
+  src.dir = ".",
+  node = 'Clock', 
+  parm = 'Start',
+  value = '2013-01-01T00:00:00',
+  overwrite = TRUE,
+  # edit.tag = '.2'
+)
+
+edit_apsimx(
+  file = "FirstSimulation-3.daymet.apsimx",
+  src.dir = ".",
+  node = 'Clock', 
+  parm = 'End',
+  value = '2014-01-01T00:00:00',
+  overwrite = TRUE
+)
+
+maize_result_5 = apsimx(
+  file = "FirstSimulation-3.power.apsimx",
+  value = "report")
+
+maize_result_5$Sim = 'COMO SSURGO DAYMET'
+
+
+
+
+
+
+
+M <- do.call(rbind, list(maize_result_3, maize_result_4, maize_result_5))
+ggplot(data = M, aes(x = Date, y = yield_Kgha, color = Sim)) + 
+  geom_line()+
+  geom_point()+
+  theme_light()+
+  scale_color_manual(values = c('cornflowerblue', 'DarkGray', 'Black'))
+```
+
+
+## What about swapping in/out cultivars?
+
+```{r}
+
+inspect_apsimx(file = 'FirstSimulation-3.apsimx',
+              node = 'Crop')
+
+
+tempCultivars = c(
+  'A_100',
+  'A_103',
+  'A_105',
+  'A_108',
+  'A_110',
+  'A_112',
+  'A_115',
+  'A_120',
+  'A_130',
+  'A_80',
+  'A_90',
+  'A_95',
+  'Atrium',
+  'B_100',
+  'B_103',
+  'B_105',
+  'B_108',
+  'B_110',
+  'B_112',
+  'B_115',
+  'B_120',
+  'B_130',
+  'B_80',
+  'B_90',
+  'B_95',
+  'CG4141',
+  'Deklab_XL82',
+  'GH_5009',
+  'GH_5019WX',
+  'HY_110',
+  'Hycorn_40',
+  'Hycorn_53',
+  'Katumani',
+  'Laila',
+  'LY_110',
+  'Makueni',
+  'malawi_local',
+  'Melkassa',
+  'mh12',
+  'mh16',
+  'mh17',
+  'mh18',
+  'mh19',
+  'NSCM_41',
+  'P1197',
+  'Pioneer_3153',
+  'Pioneer_33M54',
+  'Pioneer_34K77',
+  'Pioneer_38H20',
+  'Pioneer_39G12',
+  'Pioneer_39V43',
+  'r201',
+  'r215',
+  'sc401',
+  'sc501',
+  'sc601',
+  'sc623',
+  'sc625',
+  'sr52')
+
+
+cultivar_res_list <- map(
+  tempCultivars,
+  function(tempCultivar){
+    edit_apsimx(
+      file = "FirstSimulation-3.apsimx",
+      src.dir = ".",
+      node = 'Crop',
+      parm = 'CultivarName',
+      value = tempCultivar,
+      edit.tag = ".temp"
+      )
+    
+    maize_result_temp = apsimx(
+      file = "FirstSimulation-3.temp.apsimx",
+      value = "report")
+    
+    maize_result_temp$Cultivar <- tempCultivars[i]
+    
+    return(maize_result_temp)
+  }
+)
+
+do.call(rbind, cultivar_res_list) %>% 
+  ggplot(aes(Date, yield_Kgha, color = Cultivar))+
+  geom_line()+
+  geom_point()+
+  theme_light()
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+# Columbia MO 2013
+surgo_dat <- get_ssurgo_soil_profile(lonlat = c(-92.328636, 38.951561))
+
+edit_apsimx_replace_soil_profile(
+  file = "FirstSimulation.apsimx",
+  src.dir = ".",
+  soil.profile = surgo_dat[[1]], 
+  edit.tag = "-3",
+)
+
+maize_result_3 = apsimx(
+  file = "FirstSimulation-3-1.apsimx", # cannot be  the path
+  value = "report")
+
+
+maize_result_3$Sim = 'COMO SSURGO'
+```
+
+
+```{r}
+
+
+require(daymetr)
+daymet_2013 <- get_daymet2_apsim_met(
+  lonlat = c(-92.328636, 38.951561), 
+  years = c(2013, 2013), 
+  wrt.dir = ".", 
+  filename = 'columbia2013.met'
+  )
+
+
+
+
+
+
+
+require(nasapower)
+get_power_apsim_met(lonlat = c(-93.4345, 42.049), 
+                      years = c(2013, 2013), 
+                      wrt.dir = "."#, 
+                      # filename = ''
+                      )
+
+```
+
+
+
+
+
+
+```{r}
+# available cultivars:
+  
+a = "A_100
+A_103
+A_105
+A_108
+A_110
+A_112
+A_115
+A_120
+A_130
+A_80
+A_90
+A_95
+Atrium
+B_100
+B_103
+B_105
+B_108
+B_110
+B_112
+B_115
+B_120
+B_130
+B_80
+B_90
+B_95
+CG4141
+Deklab_XL82
+GH_5009
+GH_5019WX
+HY_110
+Hycorn_40
+Hycorn_53
+Katumani
+Laila
+LY_110
+Makueni
+malawi_local
+Melkassa
+mh12
+mh16
+mh17
+mh18
+mh19
+NSCM_41
+P1197
+Pioneer_3153
+Pioneer_33M54
+Pioneer_34K77
+Pioneer_38H20
+Pioneer_39G12
+Pioneer_39V43
+r201
+r215
+sc401
+sc501
+sc601
+sc623
+sc625
+sr52"
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
