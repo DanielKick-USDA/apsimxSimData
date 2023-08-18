@@ -1,0 +1,828 @@
+---
+title: "00.06_apsimx_sim_factorial_gps_grid"
+format: html
+editor: source
+---
+
+This file is basically a repeat of 00.04 but uses what I learned from that file and from 00.05 to speed up computation by using apsimx to run the factorials for each site rather than calling apsimx once per condition set.
+
+```{r}
+library(tidyverse)
+library(apsimx)
+
+apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
+apsimx_options(examples.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\Examples')
+
+
+require(soilDB)
+require(sp)
+require(sf)
+require(spData)
+
+devtools::load_all()
+```
+
+```{r}
+cache_path <- '../data/00.06_apsimx_sim_factorial_gps_grid/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+## Setup for APSIMX template file.
+
+Many cultivars
+```{r cultivars tested}
+# [Field].Sow on a fixed date.Script.CultivarName = A_80, A_90, A_95, A_100, A_103, A_105, A_108, A_110, A_112, A_115, A_120, A_130, Atrium, B_80, B_90, B_95, B_100, B_103, B_105, B_108, B_110, B_112, B_115, B_120, B_130, CG4141, GH_5009, GH_5019WX, HY_110, Hycorn_40, Hycorn_53, Katumani, Laila, LY_110, Makueni, malawi_local, Melkassa, mh12, mh16, mh17, mh18, mh19, NSCM_41, P1197, Pioneer_3153, Pioneer_33M54, Pioneer_34K77, Pioneer_38H20, Pioneer_39G12, Pioneer_39V43, r201, r215, sc401, sc501, sc601, sc623, sc625, sr52
+```
+
+Varying planting days
+```{r}
+planting_dates <- data.frame(
+  expand.grid(
+    years = 2000, # instead of including a leap year and non-leap year 
+                  # I only use one year and sample more heavily. Otherwise there
+                  # would be doublets with larger gaps.
+    doy = seq(50, 170, by = 4) 
+    )
+  )
+
+
+planting_dates$planting_date <- as.Date(planting_dates$doy, 
+                                        origin = paste0(planting_dates$year, '-01-01'))
+# convert to day-month format
+planting_dates$planting_date <- unlist(
+  map(str_split(planting_dates$planting_date, '-'), function(e){
+    paste0(e[3], '-', month.abb[as.numeric(e[2])])
+}))
+
+# string for apsimx
+paste(unique(planting_dates$planting_date), collapse = ', ' )
+```
+
+
+## Small scale test
+Using the factorial experiment file `SimulateFactorial_Tiny.apsimx` which contains only two cultivars, confirm that that I can change the necessary soil and weather inputs. 
+
+```{r}
+# get weather and soil data
+cache_path
+
+factorial_file = 'SimulateFactorial_Tiny.apsimx'
+
+ith_lon = -86.52960
+ith_lat = 34.72952
+ith_year_start = '1984'
+ith_year_end = '2022'
+ith_year_end
+ith_planting_date = '1-Apr'
+ith_cultivar = 'A_80'
+ith_base_file = "SimulateBasic_-90_34.apsimx"  
+
+# Download the needed data
+run_apsimx_for_gps(
+    lon = ith_lon,
+    lat = ith_lat,
+    year_start = ith_year_start,
+    year_end = ith_year_end,
+    met_dir = paste0(cache_path, 'power/'),
+    ssurgo_dir = paste0(cache_path, 'ssurgo/'),
+    planting_date = '1-Apr',
+    cultivar = 'A_80',
+    base_file = "SimulateBasic_-90_34.apsimx",
+    src.dir = cache_path,
+    only_dl_data = TRUE
+  )
+```
+
+Use a simple experiment to get the soil data in a apsimx compatible format.
+```{r}
+# Modify a base_file to insert soil data
+ith_ssurgo_path <- paste0(cache_path, 
+                          'ssurgo/', 
+                          paste0(as.character(ith_lon),'_', as.character(ith_lat),'.RDS'))
+
+file.exists(ith_ssurgo_path)
+
+
+edit_tag = '_temp_soil'
+temp_file <- paste0(str_replace(ith_base_file, '\\.apsimx$', ''), edit_tag, '.apsimx')
+
+surgo_dat <- readRDS(ith_ssurgo_path)
+
+edit_apsimx_replace_soil_profile(
+  file = ith_base_file,
+  src.dir = cache_path,
+  soil.profile = surgo_dat[[1]],
+  edit.tag = edit_tag
+)
+```
+
+Now move the soil data into a factorial experiment.
+```{r}
+# Now look at the json of the new file and target experiment
+factorial_file_json <- jsonlite::read_json(paste0(cache_path, factorial_file))
+temp_file_json      <- jsonlite::read_json(paste0(cache_path, temp_file))
+
+replacement_soil <- temp_file_json$Children[[2]]$Children[[5]] 
+
+current_soil <- factorial_file_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]
+
+# check if the names match
+1 == mean(names(replacement_soil) == names(current_soil))
+# overwrite with the values
+factorial_file_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]] <- replacement_soil
+
+factorial_temp_file <- paste0(str_replace(factorial_file, '\\.apsimx', ''), edit_tag, '.apsimx')
+
+jsonlite::write_json(factorial_file_json, 
+                     paste0(cache_path, factorial_temp_file), 
+                     pretty = TRUE, 
+                     digits = NA, auto_unbox = TRUE, null = "null", 
+                     na = "null")
+```
+
+
+
+Update the weather file to be used
+```{r}
+
+# this should be fixed. If I change the base apsimx file then it should change
+ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met'
+
+
+
+
+ith_met_path <- paste0(cache_path, 
+                          'power/', 
+                          paste0(as.character(ith_lon),'_', 
+                                 as.character(ith_lat),'_', 
+                                 as.character(ith_year_start),'-', 
+                                 as.character('01-01'),'_', 
+                                 as.character(ith_year_end),'-', 
+                                 as.character('12-31'),
+                                 '.met'))
+
+
+file.exists(ith_met_path)
+
+
+factorial_file_text <- read_file(paste0(cache_path, factorial_temp_file))
+factorial_file_text <- unlist(str_split(factorial_file_text, '\\n'))
+
+ith_met_path <- str_split(ith_met_path, pattern = '/')[[1]]
+replace_met <- ith_met_path[length(ith_met_path)]
+
+
+mask <- str_detect(string = factorial_file_text, ith_expect_met)
+relevant_line <- factorial_file_text[mask]
+
+print(length(relevant_line) == 1)
+
+
+replacement_line <- str_replace(relevant_line, pattern = ith_expect_met, replacement = replace_met)
+factorial_file_text[mask] <- replacement_line
+factorial_file_text <- paste(factorial_file_text, collapse = '\n')
+write_file(factorial_file_text, 
+           paste0(cache_path, factorial_temp_file))
+```
+
+
+
+
+## Package above into a version that works with the full factorial experiment file. 
+
+```{r}
+modify_and_run_apsimx_factorial <- function(
+    ith_lon = -86.52960,
+    ith_lat = 34.72952,
+    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    factorial_file = 'SimulateFactorial_Tiny.apsimx',
+    # this should be fixed. If I change the base apsimx file then it should change
+    ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+    ith_year_start = '1984',
+    ith_year_end = '2022',
+    ith_base_file = "SimulateBasic_-90_34.apsimx"    
+){
+  # Setup ----
+  # set up some state variables so that the simulation is run only if the needed inputs are available.
+  ssurgo_data_ready  <- FALSE # SSURGO downloaded?
+  ssurgo_names_match <- FALSE # Names in json match? (Is the position in the list of lists right?)
+  met_data_ready     <- FALSE # Met downloaded?
+  met_lines_match    <- FALSE # Exactly one line in the apsimx file to update?
+  factorial_temp_file <- NA # If there is no soil data this file won't exist.
+  
+  # get weather and soil data
+  try(
+    run_apsimx_for_gps(
+      lon = ith_lon,
+      lat = ith_lat,
+      year_start = ith_year_start,
+      year_end = ith_year_end,
+      met_dir = paste0(cache_path, 'power/'),
+      ssurgo_dir = paste0(cache_path, 'ssurgo/'),
+      planting_date = '1-Apr',
+      cultivar = 'A_80',
+      base_file = "SimulateBasic_-90_34.apsimx",
+      src.dir = cache_path,
+      only_dl_data = TRUE
+    )
+  )
+  
+  # Work with Soil Data ----
+  # Modify a base_file to insert soil data
+  ith_ssurgo_path <- paste0(cache_path, 
+                            'ssurgo/', 
+                            paste0(as.character(ith_lon),'_', as.character(ith_lat),'.RDS'))
+  
+  # update state variable
+  ssurgo_data_ready <- file.exists(ith_ssurgo_path)
+  
+  # put soil data in simple file
+  if(ssurgo_data_ready){
+    edit_tag = '_temp_soil'
+    temp_file <- paste0(str_replace(ith_base_file, '\\.apsimx$', ''), edit_tag, '.apsimx')
+    
+    surgo_dat <- readRDS(ith_ssurgo_path)
+    
+    edit_apsimx_replace_soil_profile(
+      file = ith_base_file,
+      src.dir = cache_path,
+      soil.profile = surgo_dat[[1]],
+      edit.tag = edit_tag
+    )  
+  }
+  
+  # Move soil dat into complex file
+  if(ssurgo_data_ready){
+    # Now look at the json of the new file and target experiment
+    factorial_file_json <- jsonlite::read_json(paste0(cache_path, factorial_file))
+    temp_file_json      <- jsonlite::read_json(paste0(cache_path, temp_file))
+    
+    replacement_soil <- temp_file_json$Children[[2]]$Children[[5]] 
+    
+    current_soil <- factorial_file_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]
+    
+    # check if the names match
+    ssurgo_names_match <- 1 == mean(names(replacement_soil) == names(current_soil))
+    
+    if(ssurgo_names_match){
+      # overwrite with the values
+      factorial_file_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]] <- replacement_soil
+      
+      factorial_temp_file <- paste0(str_replace(factorial_file, '\\.apsimx', ''), edit_tag, '.apsimx')
+      
+      jsonlite::write_json(factorial_file_json, 
+                           paste0(cache_path, factorial_temp_file), 
+                           pretty = TRUE, 
+                           digits = NA, auto_unbox = TRUE, null = "null", 
+                           na = "null")  
+    }
+  }
+  # Work with Weather Data ----
+  ith_met_path <- paste0(cache_path, 
+                         'power/', 
+                         paste0(as.character(ith_lon),'_', 
+                                as.character(ith_lat),'_', 
+                                as.character(ith_year_start),'-', 
+                                as.character('01-01'),'_', 
+                                as.character(ith_year_end),'-', 
+                                as.character('12-31'),
+                                '.met'))
+  
+  met_data_ready <- file.exists(ith_met_path)
+  if((met_data_ready & !is.na(factorial_temp_file))){
+    
+    factorial_file_text <- read_file(paste0(cache_path, factorial_temp_file))
+    factorial_file_text <- unlist(str_split(factorial_file_text, '\\n'))
+    
+    ith_met_path <- str_split(ith_met_path, pattern = '/')[[1]]
+    replace_met <- ith_met_path[length(ith_met_path)]
+    
+    
+    mask <- str_detect(string = factorial_file_text, ith_expect_met)
+    relevant_line <- factorial_file_text[mask]
+    
+    met_lines_match <- (length(relevant_line) == 1)
+    if(met_lines_match){
+      replacement_line <- str_replace(relevant_line, pattern = ith_expect_met, replacement = replace_met)
+      factorial_file_text[mask] <- replacement_line
+      factorial_file_text <- paste(factorial_file_text, collapse = '\n')
+      write_file(factorial_file_text, 
+                 paste0(cache_path, factorial_temp_file))  
+    }
+  }
+  
+  # If the tests pass, then run the file ----
+  if((ssurgo_data_ready & 
+      ssurgo_names_match & 
+      met_data_ready & 
+      met_lines_match & 
+      !is.na(factorial_temp_file))){
+    
+    res <- apsimx(
+      file = factorial_temp_file,
+      src.dir = cache_path,
+      value = "report")
+    
+  }  else {
+    res = data.frame()
+  }
+  # if there was an issue, return an empty df
+  if(nrow(res) == 0){
+    res <- data.frame(
+      CheckpointID = NA, SimulationID = NA, Experiment = NA, FolderName = NA, 
+      SowDate = NA, Genotype = NA, Zone = NA, Clock.Today = NA, 
+      Maize.AboveGround.Wt = NA, Maize.LAI = NA, yield_Kgha = NA, Date = NA
+    )
+  # and also copy the file so that I can audit it and figure out why it did not work.
+    ensure_dir_path_exists(paste0(cache_path, 'apsimx_audits/'))
+    file.copy(paste0(cache_path, factorial_temp_file),
+              paste0(cache_path, 'apsimx_audits/',  paste(c(ith_lon, ith_lat, ith_year_start, ith_year_end, factorial_temp_file), collapse = '__' )))
+  }
+  return(cbind(data.frame(ith_lon, ith_lat, ith_year_start, ith_year_end, factorial_file), res))
+}
+
+
+
+    
+# quick test to show that bad coordinates won't cause the loop to fail
+for(i in c(-86.52960, 86.52960, -86.52960)){
+  res <- modify_and_run_apsimx_factorial(
+    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    factorial_file = 'SimulateFactorial_Tiny.apsimx',
+    # this should be fixed. If I change the base apsimx file then it should change
+    ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+    ith_lon = i,
+    ith_lat = 34.72952,
+    ith_year_start = '1984',
+    ith_year_end = '2022',
+    ith_base_file = "SimulateBasic_-90_34.apsimx"    
+  )
+}
+```
+
+
+
+```{r}
+wrapper_apsimx_factorial <- function(
+    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+    factorial_file = 'SimulateFactorial_Tiny.apsimx',
+    # this should be fixed. If I change the base apsimx file then it should change
+    ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+    ith_lon = -86.52960,
+    ith_lat = 34.72952,
+    ith_year_start = '1984',
+    ith_year_end = '2022',
+    ith_base_file = "SimulateBasic_-90_34.apsimx"   
+){
+  # Same approach as `run_and_store_apsimx_for_gps` but for a factorial experiment
+  ensure_dir_path_exists(cache_path)
+  ensure_dir_path_exists(save_path)
+  
+  save_name <- paste0(c(as.character(ith_lon), 
+                        as.character(ith_lat), 
+                        as.character(ith_year_start), 
+                        as.character(ith_year_end),
+                        str_replace(factorial_file, '\\.apsimx$', '')
+  ), collapse = '__')
+  save_name <- paste0(save_name, '.csv')
+
+  print(save_name)
+  if(!file.exists(paste0(save_path,save_name))){
+    res = modify_and_run_apsimx_factorial(
+      cache_path = cache_path,
+      factorial_file = factorial_file,
+      ith_expect_met = ith_expect_met,
+      ith_lon = ith_lon,
+      ith_lat = ith_lat,
+      ith_year_start = ith_year_start,
+      ith_year_end = ith_year_end,
+      ith_base_file = ith_base_file
+      )
+
+    write.csv(res, paste0(save_path,save_name))
+  }
+}
+
+
+wrapper_apsimx_factorial(
+    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+    factorial_file = 'SimulateFactorial_Tiny.apsimx',
+    # this should be fixed. If I change the base apsimx file then it should change
+    ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+    ith_lon = -86.52960,
+    ith_lat = 34.72952,
+    ith_year_start = '1984',
+    ith_year_end = '2022',
+    ith_base_file = "SimulateBasic_-90_34.apsimx"   
+)
+
+```
+
+
+```{r}
+# this takes a while to run.
+# wrapper_apsimx_factorial(
+#     ith_lon = -86.52960,
+#     ith_lat = 34.72952,
+#     save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+#     factorial_file = 'SimulateFactorial.apsimx',
+#     ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#     ith_year_start = '1984',
+#     ith_year_end = '2022',
+#     ith_base_file = "SimulateBasic_-90_34.apsimx"   
+# )
+```
+
+
+
+
+# run on all g2f locations
+
+```{r points to use}
+gps <- read.csv('../inst/extdata/gps_coords.csv')
+gps <- gps[!stringr::str_detect(gps[, 'Env'], '^ONH.+'), ]
+gps <- gps[!stringr::str_detect(gps[, 'Env'], '^GEH.+'), ]
+
+gps <- gps %>% 
+  rename(lat = Latitude_of_Field,
+         lon = Longitude_of_Field) %>% 
+  select(lat, lon) %>% 
+  distinct()
+
+```
+
+
+```{r}
+tic_outer <- Sys.time()
+tics <- c()
+for(i in seq(1, nrow(gps))){
+  ## all because I don't have tqdm ====
+  tics[length(tics)+1] <- Sys.time()
+  if(length(tics)>1){ 
+    #      # Remaining iter    # Worst case time per iter (and a way to ignore cached results)
+    secs = (nrow(gps)-(i-1)) * max(tics[2:length(tics)]-tics[1])
+    minutes = as.character(secs %/% 60)
+    sec = as.character(round(secs %% 60))
+    print(paste(rep('-', 80), collapse = ''))
+    print(paste0(minutes, ':', if(as.numeric(sec)>=9){sec}else{paste0('0', sec)}))
+    print(paste(rep('-', 80), collapse = ''))
+    }
+  wrapper_apsimx_factorial(
+      ith_lon = gps[i, 'lon'],
+      ith_lat = gps[i, 'lat'],
+      save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+      # factorial_file = 'SimulateFactorial_Tiny.apsimx', # 'SimulateFactorial.apsimx', 
+      factorial_file = 'SimulateFactorial.apsimx', 
+      ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+      cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+      ith_year_start = '1984',
+      ith_year_end = '2022',
+      ith_base_file = "SimulateBasic_-90_34.apsimx"
+  )  
+}
+toc_outer <- Sys.time()
+print(toc_outer-tic_outer)
+```
+
+Check if all g2f sites worked
+```{r}
+
+gps %>% head()
+
+temp <- list.files("../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/")
+
+gps_counts <- do.call(rbind, map(1:nrow(gps), function(i){
+  mask <- str_detect(temp, paste0(gps[i, 'lon'], '__', gps[i, 'lat']))
+  nvals <- nrow(read.csv(paste0("../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", temp[mask])))
+  return(data.frame(lon = gps[i, 'lon'], lat = gps[i, 'lat'], nvals = nvals))
+}))
+
+
+gps_counts %>% 
+  mutate(Pass = nvals > 1) %>% 
+  ggplot(aes(lon, lat, color = Pass))+
+  geom_point()
+
+
+filter(gps_counts, nvals == 1)
+
+```
+
+
+```{r}
+wrapper_apsimx_factorial(
+      ith_lon = -89.55635,
+      ith_lat =  44.11905,
+      save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+      # factorial_file = 'SimulateFactorial_Tiny.apsimx', # 'SimulateFactorial.apsimx', 
+      factorial_file = 'SimulateFactorial.apsimx', 
+      ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+      cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+      ith_year_start = '1984',
+      ith_year_end = '2022',
+      ith_base_file = "SimulateBasic_-90_34.apsimx"
+  )
+
+
+# function(
+#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#     save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+#     factorial_file = 'SimulateFactorial_Tiny.apsimx',
+#     # this should be fixed. If I change the base apsimx file then it should change
+#     ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+#     ith_lon = -86.52960,
+#     ith_lat = 34.72952,
+#     ith_year_start = '1984',
+#     ith_year_end = '2022',
+#     ith_base_file = "SimulateBasic_-90_34.apsimx"   
+# ){
+  # Same approach as `run_and_store_apsimx_for_gps` but for a factorial experiment
+  ensure_dir_path_exists(cache_path)
+  ensure_dir_path_exists(save_path)
+  
+  save_name <- paste0(c(as.character(ith_lon), 
+                        as.character(ith_lat), 
+                        as.character(ith_year_start), 
+                        as.character(ith_year_end),
+                        str_replace(factorial_file, '\\.apsimx$', '')
+  ), collapse = '__')
+  save_name <- paste0(save_name, '.csv')
+
+  print(save_name)
+  if(!file.exists(paste0(save_path,save_name))){
+    res = modify_and_run_apsimx_factorial(
+      cache_path = cache_path,
+      factorial_file = factorial_file,
+      ith_expect_met = ith_expect_met,
+      ith_lon = ith_lon,
+      ith_lat = ith_lat,
+      ith_year_start = ith_year_start,
+      ith_year_end = ith_year_end,
+      ith_base_file = ith_base_file
+      )
+
+    write.csv(res, paste0(save_path,save_name))
+  }
+# }
+```
+
+
+```{r}
+
+# I'm pausing this avenue. The issue is that the soil data needs to be edited before it can run. This appears to be a _very_ common problem. Here are some options:
+# 1. Validate soil/weather before use. 
+# 1.a. Test each separately and then mix and match soil/weather to get hypothetical yields in non-existant combiantions
+# 2. Edit soil on the fly
+# 2.a. This is the approach I have been trying. The SW parameter in the soil table is not editable directly. If I try editing the air-dry then apsimx fails with an error I havent' figured out. 
+
+
+
+# # fails
+# modify_and_run_apsimx_factorial(
+#     ith_lon = -96.42790,
+#     ith_lat = 30.53826,
+#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#     factorial_file = 'SimulateFactorial_Tiny.apsimx',
+#     # this should be fixed. If I change the base apsimx file then it should change
+#     ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+#     ith_year_start = '1984',
+#     ith_year_end = '2022',
+#     ith_base_file = "SimulateBasic_-90_34.apsimx"
+# )
+
+
+# # inspect file and see if I can find the negative values. 
+# 
+# '../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/'
+# 
+# 
+# temp <- jsonlite::read_json('../data/00.06_apsimx_sim_factorial_gps_grid/apsimx_audits/-96.4279__30.53826__1984__2022__SimulateFactorial_Tiny_temp_soil.apsimx')
+# 
+# 
+# 
+# temp %>% str(max.level = 2)
+# 
+# temp$Children[[2]]$Children %>% str(max.level = 2)
+# 
+# 
+# temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]] %>% str(max.level = 2)
+# 
+# soil_module <- temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]] 
+# soil_module %>% str(max.level = 2)
+# 
+# 
+# ## ----
+# # might be air-dry value?
+# 
+# # this looks like LL15
+# soil_module$Children[[1]]$Children[[3]]$LL
+# 
+# 
+# soil_module$Children[[1]]$Children[[3]]
+# 
+# # list of 10 -- one for each layer?
+# soil_module$Children[[2]] %>% str(max.level = 2)
+# 
+# 
+# walk(c(
+#   1, 
+#   2, 
+#   3, 
+#   4, 
+#   5, 
+#   6, 
+#   7, 
+#   8, 
+#   9, 
+#   # 10
+# ), function(i){
+#   print(paste0(i, paste(rep('-', times = 78), collapse = '')))
+#   print(
+#   soil_module$Children[[i]] %>% str(max.level = 2)
+# )})
+# 
+# # 1 and maybe 6?
+# 
+# 
+# 
+# 
+# soil_module$Children[[1]]$AirDry 
+# soil_module$Children[[6]]$InitialValues 
+# 
+# 
+# # check if soil water in layer is below air-dry value
+# soil_layers <- min(length(
+#   temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[1]]$AirDry 
+# ),
+# length(temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[6]]$InitialValues))
+# 
+# # ith_layer = 1
+# for(ith_layer in seq(1, soil_layers)){
+#   print(ith_layer)
+#   # if soild water is below air-dry, overwrite with air-dry
+#   if( temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[6]]$InitialValues[[ith_layer]] <
+#       temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[1]]$AirDry[[ith_layer]] ){
+#     
+#     temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[6]]$InitialValues[[ith_layer]] <- temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[1]]$AirDry[[ith_layer]]
+#     
+#   }
+# }
+# 
+# 
+# 
+# jsonlite::write_json(temp, 
+#                      "../data/00.06_apsimx_sim_factorial_gps_grid/apsimx_audits/test_changes.apsimx", 
+#                      pretty = TRUE, 
+#                      digits = NA, auto_unbox = TRUE, null = "null", 
+#                      na = "null")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Repeat for grid over usa
+### Load GPS Data
+Which contained data that I could cache?
+Note, these cached data are not what I will be using for the models due to an error with pre 1984 data
+```{r}
+load_path <- '../data/00.02_download_env_db_entries/gps_grid/'
+
+gps_grid_files <- rbind(
+  data.frame(type = 'ssurgo', file = list.files(paste0(load_path, '/apsimx_ssurgo'))),
+  data.frame(type = 'daymet', file = list.files(paste0(load_path, '/apsimx_daymet'))),
+  data.frame(type = 'power', file = list.files(paste0(load_path, '/apsimx_power')))
+  )
+  
+gps_grid_files <- gps_grid_files %>% 
+  mutate(gps = case_when(
+    type == 'ssurgo' ~ str_replace(file, pattern = '\\.RDS', replacement = ''),
+    type == 'daymet' ~ str_replace(file, pattern = '_\\d+_\\d+\\.met$', replacement = ''),
+    type == 'power' ~ str_replace(file,  pattern = '_\\d+-\\d+-\\d+\\_\\d+-\\d+-\\d+\\.met$', replacement = '')
+  )) 
+
+gps_grid_files <- gps_grid_files %>% 
+  pivot_wider(names_from = type, values_from = file)
+
+gps_grid_files <- gps_grid_files %>% 
+  tidyr::separate(gps, c('lon', 'lat'), sep = '_') %>% 
+  mutate(lon = as.numeric(lon), lat = as.numeric(lat))
+
+
+# removing ssurgo is not a sure fire solution. 
+gps_grid_files %>%
+  mutate(ssurgo = !is.na(ssurgo),
+         daymet = !is.na(daymet),
+         power = !is.na(power)) %>% 
+  group_by(ssurgo, daymet, power) %>% 
+  tally()
+
+gps_grid_files %>% 
+  ggplot(aes(x = lon, y = lat))+
+  geom_point(color = 'red')+
+  geom_point(data = gps_grid_files[complete.cases(gps_grid_files), ], color = 'black')
+
+```
+
+
+```{r}
+gps <- read.csv('../data/00.01_setup_USA_env_gps_grid/gps_grid.csv')
+
+# no seed needed here. This is just to make sure that the sampling order is random.
+gps[['order']] <- sample(1:nrow(gps))
+gps <- gps %>% arrange(order)
+
+```
+
+
+```{r}
+tic_outer <- Sys.time()
+tics <- c()
+for(i in seq(1, nrow(gps))){
+  ## all because I don't have tqdm ====
+  tics[length(tics)+1] <- Sys.time()
+  if(length(tics)>1){ 
+    #      # Remaining iter    # Worst case time per iter (and a way to ignore cached results)
+    secs = (nrow(gps)-(i-1)) * max(tics[2:length(tics)]-tics[1])
+    minutes = as.character(secs %/% 60)
+    sec = as.character(round(secs %% 60))
+    print(paste(rep('-', 80), collapse = ''))
+    print(paste0(minutes, ':', if(as.numeric(sec)>=9){sec}else{paste0('0', sec)}))
+    print(paste(rep('-', 80), collapse = ''))
+    }
+  wrapper_apsimx_factorial(
+      ith_lon = gps[i, 'lon'],
+      ith_lat = gps[i, 'lat'],
+      save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+      factorial_file = 'SimulateFactorial.apsimx',
+      ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+      cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+      ith_year_start = '1984',
+      ith_year_end = '2022',
+      ith_base_file = "SimulateBasic_-90_34.apsimx"
+  )  
+}
+toc_outer <- Sys.time()
+print(toc_outer-tic_outer)
+```
