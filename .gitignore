@@ -2,4 +2,31 @@
 .Rhistory
 .RData
 .Ruserdata
-data/
+
+*.met
+*.RDS
+
+# produced by apsim
+*.db
+*.db-wal
+*.db-shm
+*.apsimx.bak
+
+# in future use exceptions rather than matching so that all but desired files can be hidden by ignoring data
+
+data/00.01_setup_USA_env_gps_grid/*.csv
+data/00.01_setup_USA_env_gps_grid/g2f_cache/*.csv
+
+data/00.02_download_env_db_entries/*/*/*.csv
+data/00.02_download_env_db_entries/*/*/*.sqlite
+
+data/00.04_apsimx_sim/g2f_cache/*.csv
+data/00.04_apsimx_sim/result_cache/*.csv
+
+# data/00.05_apsimx_sim_en_masse/
+
+data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/*.csv
+data/00.06_apsimx_sim_factorial_gps_grid/apsimx_audits/*
+# temp files
+data/00.06_apsimx_sim_factorial_gps_grid/SimulateBasic_-90_34_temp_soil.apsimx
+data/00.06_apsimx_sim_factorial_gps_grid/SimulateFactorial_Tiny_temp_soil.apsimx
