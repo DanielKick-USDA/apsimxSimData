@@ -1,0 +1,162 @@
+---
+title: "Untitled"
+format: html
+editor: source
+---
+
+```{r}
+'output/g2fc/apsimx_daymet/'
+'output/g2fc/apsimx_power/'
+'output/g2fc/apsimx_ssurgo/'
+library(tidyverse)
+
+
+save_as_db <- function(save_path, df, table_name, overwrite_df = TRUE){
+  # https://cran.r-project.org/web/packages/RSQLite/vignettes/RSQLite.html
+  library(DBI)
+  mydb <- dbConnect(RSQLite::SQLite(), save_path, overwrite = overwrite_df)
+  dbWriteTable(mydb, table_name, df, )
+  dbDisconnect(mydb)  
+}
+```
+
+```{r ssurgo}
+apsimx_ssurgo_to_table <- function(rds_path = 'output/g2fc/apsimx_ssurgo/-100.7471915_41.0514495.RDS', wide = TRUE){
+
+  temp <- str_split(rds_path, '/')[[1]]
+  temp <- str_remove_all(temp[length(temp)], '.RDS')
+  temp <- str_split(temp, '_')[[1]]
+  longitude <- temp[1]
+  latitude <- temp[2]
+  
+  M <- readRDS(rds_path)
+  soil <- M[[1]]$soil  
+  
+  if(wide == TRUE){
+    soil_wide <- soil %>% 
+      pivot_wider(
+      names_from = 'Depth', 
+      values_from = names(soil)[names(soil) != 'Depth'])
+    
+    res <- cbind(data.frame(longitude, latitude), soil_wide)
+  } else {
+    res <- cbind(data.frame(longitude, latitude), soil)
+  }
+  return(res)
+}
+```
+
+```{r ssurgo save}
+for( dir_path in c('output/g2fc/apsimx_ssurgo/', 
+                   'output/usa_grid/apsimx_ssurgo/')){
+  # dir_path <- 'output/usa_grid/apsimx_ssurgo/'
+  # long format ----
+  ssurgo_table <- do.call(
+    rbind,
+    map(list.files(dir_path), 
+        function(entry){
+          if( str_ends(entry, '\\.RDS')){
+            print(paste0(dir_path, entry))
+            apsimx_ssurgo_to_table(paste0(dir_path, entry), wide = TRUE)            
+          }
+        }))
+  write.csv(ssurgo_table, paste0(dir_path, 'ssurgo_wide.csv'))
+  
+  save_as_db(save_path = paste0(dir_path, 'ssurgo_wide.sqlite'), 
+           df = ssurgo_table, 
+           table_name = 'ssurgo', 
+           overwrite_df = TRUE)  
+  
+  # wide format ----
+  ssurgo_table <- do.call(
+    rbind,
+    map(list.files(dir_path), 
+        function(entry){
+          if( str_ends(entry, '\\.RDS')){
+            print(paste0(dir_path, entry))
+            apsimx_ssurgo_to_table(paste0(dir_path, entry), wide = FALSE)            
+          }
+        }))
+  write.csv(ssurgo_table, paste0(dir_path, 'ssurgo_long.csv'))
+  
+  save_as_db(save_path = paste0(dir_path, 'ssurgo_long.sqlite'), 
+         df = ssurgo_table, 
+         table_name = 'ssurgo', 
+         overwrite_df = TRUE)
+}
+```
+
+```{r daymet and power}
+apsimx_met_to_table <- function(file_path = 'output/g2fc/apsimx_daymet/-100.7471915_41.0514495_1980_2022.met'){
+  res <- read.table(file_path, 
+                    header = FALSE, 
+                    skip = 9, 
+                    col.names = c('year', 'day', 
+                                  'radn_MJ_m2_day', 'maxt_C', 'mint_C', 'rain_mm', 
+                                  'vp_hPa', 'swe_kg_m2'))
+  
+  # process the first few lines to get the relevant metadata
+  file_head <- read_file(file_path)
+  file_head <- str_split(file_head, '\\n')[[1]][1:9]
+  file_head <- str_replace(file_head, '\\r', '')
+  file_head <- str_replace_all(file_head, '"', '')
+  file_head <- str_replace_all(file_head, ' ', '')
+  file_head <- str_split(file_head, '=')
+  
+  latitude = file_head[[4]][2]
+  longitude = file_head[[5]][2]
+  tav = file_head[[6]][2]
+  amp = file_head[[7]][2]
+  
+  res <- cbind(data.frame(longitude, latitude, tav, amp), res)
+  
+  return(res)  
+}
+```
+
+```{r daymet save}
+for( dir_path in c('output/g2fc/apsimx_daymet/', 
+                   'output/usa_grid/apsimx_daymet/')){
+  # dir_path = 'output/g2fc/apsimx_daymet/'
+  daymet_table <- do.call(
+    rbind,
+    map(list.files(dir_path), 
+        function(entry){
+          if( str_ends(entry, '\\.met')){
+            # print(paste0(dir_path, entry))
+            apsimx_met_to_table(paste0(dir_path, entry))            
+          }
+        }))
+  write.csv(daymet_table, paste0(dir_path, 'daymet_long.csv'))
+  
+  save_as_db(save_path = paste0(dir_path, 'daymet_long.sqlite'), 
+           df = daymet_table, 
+           table_name = 'daymet', 
+           overwrite_df = TRUE)
+
+}
+```
+
+```{r power save}
+for( dir_path in c('output/g2fc/apsimx_power/', 
+                   'output/usa_grid/apsimx_power/')){
+
+  power_table <- do.call(
+    rbind,
+    map(list.files(dir_path), 
+        function(entry){
+          if( str_ends(entry, '\\.met')){
+            apsimx_met_to_table(paste0(dir_path, entry))            
+          }
+        }))
+  
+  write.csv(power_table, paste0(dir_path, 'power_long.csv'))
+  
+  save_as_db(save_path = paste0(dir_path, 'power_long.sqlite'), 
+           df = power_table, 
+           table_name = 'power', 
+           overwrite_df = TRUE)
+
+}
+```
+
