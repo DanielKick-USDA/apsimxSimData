@@ -1,0 +1,1261 @@
+---
+title: "00.04_apsimx_sim"
+format: html
+editor: source
+---
+
+## Setup
+
+```{r}
+library(tidyverse)
+library(apsimx)
+
+apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
+apsimx_options(examples.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\Examples')
+
+
+require(soilDB)
+require(sp)
+require(sf)
+require(spData)
+
+devtools::load_all()
+```
+
+```{r}
+cache_path <- '../data/00.04_apsimx_sim/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+
+```{r}
+# met_path = '../data/00.02_download_env_db_entries/g2fc/apsimx_daymet/-100.7471915_41.0514495_1980_2022.met'
+# met_path = './Iowa_CC.met'
+# ssurgo_path = '../data/00.02_download_env_db_entries/g2fc/apsimx_ssurgo/-100.7471915_41.0514495.RDS'
+# 
+# sim_result <- modify_and_run_apsimx(
+#     met_path = met_path,
+#     clock_start = '2013-01-01T00:00:00',
+#     clock_end = '2014-01-01T00:00:00',
+#     ssurgo_path = ssurgo_path,
+#     planting_date = '1-Apr',
+#     cultivar = 'A_80',
+#     base_file = "BasicSimulation.apsimx"
+#     
+# )
+# 
+# sim_result2 <- modify_and_run_apsimx(
+#     met_path = './power/-92.328636_38.951561_2013-01-01_2013-12-31.met',
+#     clock_start = '2013-01-01T00:00:00',
+#     clock_end = '2014-01-01T00:00:00',
+#     ssurgo_path = paste0('./output/usa_grid/apsimx_ssurgo/', "-117.120232582092_42.9967880249023.RDS"),
+#     planting_date = '1-May',
+#     cultivar = 'A_80',
+#     base_file = "BasicSimulation.apsimx"
+#     
+# )
+# 
+# 
+# # TODO seems to run all years in met regardless of clock date. 
+# sim_result$planting = '1-Apr'
+# sim_result2$planting = '1-May'
+# 
+# do.call(rbind, list(sim_result, sim_result2)) %>% 
+#   ggplot(aes(Date, yield_Kgha, color = planting))+
+#   geom_line()+
+#   geom_point()+
+#   theme_light()
+
+```
+
+```{r}
+# ensure_dir_path_exists <- function(
+#     dir_path
+# ){
+#   if (dir.exists(dir_path)){
+#     # do nothing
+#   } else {
+#     dir.create(dir_path, recursive = T)
+#   }
+# }
+# 
+# 
+# cache_apsimx_ssurgo <- function(
+#     lonlat = c(-93.4345, 42.049),
+#     dir_path = '../data/env_data/apsimx_ssurgo', 
+#     force = FALSE,
+#     delay = 0 # add courtesy delay if batch downloading. 
+#     ){
+#   ensure_dir_path_exists(dir_path = dir_path)
+#   save_name <- paste(c(paste(lonlat, collapse = '_'), '.RDS'), collapse = '')
+#   save_path <- paste(dir_path, save_name, sep = '/')
+#   # make sure the coordinates are within usa (otherwise ssurgo won't have them)
+# 
+#   # if(!((-125 < lonlat[1]) & (lonlat[1] < -65.5))){
+#   #   print(paste('Longitude out of range. Skipping ', paste(lonlat, collapse = ', '), '.', sep = ''))  
+#   # } else if(!((24   < lonlat[2]) & (lonlat[2] <  42.25))){
+#   #   print(paste('Latitude out of range. Skipping ', paste(lonlat, collapse = ', '), '.', sep = ''))  
+#   # } else 
+#   if( !file.exists(save_path) ){
+#     # Check if file exists or should be downloaded
+#     Sys.sleep(delay)
+#     surgo_profile <- get_ssurgo_soil_profile(lonlat = lonlat)
+#     saveRDS(surgo_profile, file = save_path)
+#   }
+# }
+# 
+# 
+# require(daymetr)
+# cache_apsimx_daymet <- function(
+#     lonlat = c(-93.4345, 42.049),
+#     years = c(2013, 2013),
+#     dir_path = './daymet',
+#     force = FALSE,
+#     delay = 0
+#     ){
+#   ensure_dir_path_exists(dir_path = dir_path)
+#   save_name <- paste(c(paste(c(lonlat, years), collapse = '_'), '.met'), collapse = '')
+# 
+#   save_path <- paste(dir_path, save_name, sep = '/')
+#   if( !file.exists(save_path) ){
+#     Sys.sleep(delay)
+#     get_daymet2_apsim_met(
+#       lonlat = lonlat,
+#       years = years,
+#       wrt.dir = dir_path,
+#       filename = save_name
+#       )
+#   }
+# }
+# 
+# require(nasapower)
+# cache_apsimx_power <- function(
+#     lonlat = c(-93.4345, 42.049),
+#     dates = c('2013-01-01', '2013-12-31'),
+#     dir_path = './power',
+#     force = FALSE,
+#     delay = 0
+#     ){
+#   ensure_dir_path_exists(dir_path = dir_path)
+#   save_name <- paste(c(paste(c(lonlat, dates), collapse = '_'), '.met'), collapse = '')
+# 
+#   save_path <- paste(dir_path, save_name, sep = '/')
+#   if( !file.exists(save_path) ){
+#     Sys.sleep(delay)
+#     get_power_apsim_met(
+#       lonlat = lonlat,
+#       dates = dates,
+#       wrt.dir = dir_path,
+#       filename = save_name
+#       )
+#   }
+# }
+```
+
+
+
+```{r}
+# Breaking run_apsimx_for_gps into two parts. Prep and then run. 
+# This will ensure that a model will only be run if all the data is available
+
+# 
+# 
+# run_apsimx_for_gps <- function(
+#     lon = -90.76036,
+#     lat = 34.72952,
+#     year = '2014',
+#     met_dir = paste0(cache_path, 'power/'),
+#     ssurgo_dir = paste0(cache_path, 'ssurgo/'),
+#     planting_date = '1-Apr',
+#     cultivar = 'A_80',
+#     base_file = "BasicSimulation.apsimx"
+# ){
+#   
+#   # lon = -90.76036
+#   # lat = 34.72952
+#   # year = '2014'
+#   # met_dir = paste0(cache_path, 'power/')
+#   # ssurgo_dir = paste0(cache_path, 'ssurgo/')
+#   # planting_date = '1-Apr'
+#   # cultivar = 'A_80'
+#   # base_file = "BasicSimulation.apsimx"
+#   
+#   # Make sure there's weather data to use
+#   daterange = c(paste0(year, '-01-01'), paste0(year, '-12-31'))
+#   
+#   try(
+#     cache_apsimx_power(
+#       lonlat = c(lon, lat),
+#       dates = daterange,
+#       dir_path = met_dir,
+#       force = FALSE,
+#       delay = 0
+#     )
+#   )
+#   
+#   met_file <- paste(lon, '_', lat, '_', daterange[1], '_', daterange[2], '.met', sep = '')
+#   
+#   # Lookup ssurgo data
+#   try( # This is in case lon/lats are passed in that are not in the database. The model is not run if the files don't exist so this a way of preventing a batch download through a loop from terminating early.
+#     cache_apsimx_ssurgo(
+#       lonlat = c(lon, lat),
+#       dir_path = ssurgo_dir, 
+#       force = FALSE,
+#       delay = 0 # add courtesy delay if batch downloading. 
+#     )
+#   )
+#   
+#   ssurgo_file <- paste(lon, '_', lat, '.RDS', sep = '')
+#   
+#   
+#   # check if the needed files exist
+#   if((file.exists(paste0(met_dir, met_file)) & 
+#       file.exists(paste0(ssurgo_dir, ssurgo_file)))){
+#     # Run 
+#     res <- modify_and_run_apsimx(
+#       met_path = paste0(met_dir, met_file),
+#       clock_start = paste0(daterange[1], 'T00:00:00'),
+#       clock_end = paste0(daterange[2], 'T00:00:00'),
+#       ssurgo_path = paste0(ssurgo_dir, ssurgo_file),
+#       planting_date = planting_date,
+#       cultivar = cultivar,
+#       base_file = base_file)
+#   } else {
+#     res = data.frame()
+#   }
+#   # if there was an issue, return an empty df
+#   if(nrow(res) == 0){
+#     res <- data.frame(
+#       CheckpointID = NA,SimulationID = NA,Zone = NA,Clock.Today = NA,
+#       Maize.AboveGround.Wt = NA,Maize.LAI = NA, yield_Kgha = NA,Date = NA)
+#   }
+#   
+#   return(cbind(data.frame(lon, lat, year, planting_date, cultivar, base_file), res))
+# }
+# 
+# 
+# 
+# 
+# # Wrapper to aid in caching many results. Only runs the simulation if it doesn't already exist.
+# # Takes the same arguments as `run_apsimx_for_gps` and `cache_dir` which stores the output.
+# # `run_apsimx_for_gps`will be responsible for NOT running a simulation that lacks at least one of the input files.
+# # `run_apsimx_for_gps` does not gracefully handle errors so 
+# run_and_store_apsimx_for_gps <- function(
+#     lon = -90.76036,
+#     lat = 34.72952,
+#     year = '2014',
+#     met_dir = paste0(cache_path, 'power/'),
+#     ssurgo_dir = paste0(cache_path, 'ssurgo/'),
+#     planting_date = '1-Apr',
+#     cultivar = 'A_80',
+#     base_file = "BasicSimulation.apsimx", 
+#     cache_dir = paste0(cache_path, 'result_cache/')
+# ){
+#   ensure_dir_path_exists(cache_dir)
+#   
+#   save_name <- paste0(c(as.character(lon), 
+#                         as.character(lat), 
+#                         as.character(year), 
+#                         planting_date, 
+#                         cultivar, 
+#                         str_replace(base_file, '\\.apsimx$', '')
+#   ), collapse = '__')
+#   save_name <- paste0(save_name, '.csv')
+#   
+#   if(!file.exists(paste0(cache_dir,save_name))){
+#     # not running on bad input is handeld by `run_apsimx_for_gps`. 
+#     # An empty df will be returned and written preventing that dead end from being explored again.
+#     res = run_apsimx_for_gps(
+#       lon = lon, 
+#       lat = lat,
+#       year = year,
+#       met_dir = met_dir,
+#       ssurgo_dir = met_dir,
+#       planting_date = planting_date,
+#       cultivar = cultivar,
+#       base_file = base_file
+#     )
+#     write.csv(res, paste0(cache_dir,save_name))
+#   }   
+# }
+
+
+# run_and_store_apsimx_for_gps(
+#   lon = -90.76036,
+#   lat = 34.72952,
+#   year = '2014',
+#   met_dir = paste0(cache_path, 'power/'),
+#   ssurgo_dir = paste0(cache_path, 'ssurgo/'),
+#   planting_date = '1-Apr',
+#   cultivar = 'A_80',
+#   base_file = "BasicSimulation.apsimx", 
+#   cache_dir = paste0(cache_path, 'result_cache/')
+# )
+```
+
+
+```{r}
+# Here is a demonstration with longitudes that are valid, invalid, and already run.
+for( i in c(-90.76036, 90.76036, -90.76036)){
+  print(i)
+  run_and_store_apsimx_for_gps(
+    lon = i
+  )
+}
+```
+
+
+# run on all g2f locations
+
+```{r points to use}
+gps <- read.csv('../inst/extdata/gps_coords.csv')
+gps <- gps[!stringr::str_detect(gps[, 'Env'], '^ONH.+'), ]
+gps <- gps[!stringr::str_detect(gps[, 'Env'], '^GEH.+'), ]
+
+gps <- gps %>% 
+  rename(lat = Latitude_of_Field,
+         lon = Longitude_of_Field) %>% 
+  select(lat, lon) %>% 
+  distinct()
+```
+
+## Collect estimates for g2f sites
+
+
+```{r}
+settings_grid <- data.frame(
+  expand.grid(
+    year = as.character(2014:2022),
+    # there's a wide planting range so I should cast a wide net here.
+    # 1-Mar, 2-Jun
+    # doy 50 -> 160
+    #as.Date(160, origin = "2016-01-01")
+    doy = seq(50, 160, by = 10),
+    cultivar = c('A_90'),
+    join_on_this = c('a')
+  )
+)
+
+settings_grid
+```
+
+
+```{r add in settings}
+gps <- full_join(mutate(gps, join_on_this = 'a'),
+                 settings_grid) %>% select(-join_on_this)
+# get date
+gps$planting_date <- as.Date(gps$doy, origin = paste0(gps$year, '-01-01'))
+# convert to day-month format
+gps$planting_date <- unlist(
+  map(str_split(gps$planting_date, '-'), function(e){
+    paste0(e[3], '-', month.abb[as.numeric(e[2])])
+}))
+
+gps %>% head()
+
+```
+
+
+```{r}
+tic_outer <- Sys.time()
+tics <- c()
+for(i in seq(1, nrow(gps))){
+  ## all because I don't have tqdm ====
+  tics[length(tics)+1] <- Sys.time()
+  if(length(tics)>1){ 
+    #      # Remaining iter    # Worst case time per iter (and a way to ignore cached results)
+    secs = (nrow(gps)-(i-1)) * max(tics[2:length(tics)]-tics[1])
+    minutes = as.character(secs %/% 60)
+    sec = as.character(round(secs %% 60))
+    print(paste(rep('-', 80), collapse = ''))
+    print(paste0(minutes, ':', if(as.numeric(sec)>=9){sec}else{paste0('0', sec)}))
+    print(paste(rep('-', 80), collapse = ''))
+    }
+
+  run_and_store_apsimx_for_gps(
+    lon = gps[i, 'lon'],
+    lat = gps[i, 'lat'],
+    year = gps[i, 'year'],
+    planting_date = gps[i, 'planting_date'],
+    cultivar = gps[i, 'cultivar'],
+    base_file = "BasicSimulation.apsimx", 
+    met_dir = paste0(cache_path, 'power/'),
+    ssurgo_dir = paste0(cache_path, 'ssurgo/'),
+    cache_dir = paste0(cache_path, 'g2f_cache/')  
+  )
+}
+toc_outer <- Sys.time()
+print(toc_outer-tic_outer)
+```
+
+
+
+## Repeat for grid over usa
+
+```{r}
+# settings_grid <- data.frame(
+#   expand.grid(
+#     year = as.character(2014:2022),
+#     # there's a wide planting range so I should cast a wide net here.
+#     # 1-Mar, 2-Jun
+#     # doy 50 -> 160
+#     #as.Date(160, origin = "2016-01-01")
+#     doy = 120,
+#     cultivar = c('A_90'),
+#     join_on_this = c('a')
+#   )
+# )
+
+settings_grid <- settings_grid
+  
+```
+
+
+```{r}
+gps <- read.csv('../data/00.01_setup_USA_env_gps_grid/gps_grid.csv')
+
+gps <- full_join(mutate(gps, join_on_this = 'a'),
+                 settings_grid) %>% select(-join_on_this)
+```
+
+
+
+```{r}
+tic_outer <- Sys.time()
+tics <- c()
+for(i in seq(1, nrow(gps))){
+  print(i)
+  ## all because I don't have tqdm ====
+  tics[length(tics)+1] <- Sys.time()
+  if(length(tics)>1){ 
+    #      # Remaining iter    # Worst case time per iter (and a way to ignore cached results)
+    secs = (nrow(gps)-(i-1)) * max(tics[2:length(tics)]-tics[1])
+    minutes = as.character(secs %/% 60)
+    sec = as.character(round(secs %% 60))
+    print(paste(rep('-', 80), collapse = ''))
+    print(paste0(minutes, ':', if(as.numeric(sec)>=9){sec}else{paste0('0', sec)}))
+    print(paste(rep('-', 80), collapse = ''))
+  }
+  try(
+    run_and_store_apsimx_for_gps(
+      lon = gps[i, 'lon'],
+      lat = gps[i, 'lat'],
+      year = gps[i, 'year'],
+      planting_date = gps[i, 'planting_date'],
+      cultivar = gps[i, 'cultivar'],
+      base_file = "BasicSimulation.apsimx", 
+      met_dir = paste0(cache_path, 'power/'),
+      ssurgo_dir = paste0(cache_path, 'ssurgo/'),
+      cache_dir = paste0(cache_path, 'gps_grid_cache/') # <-----------------------
+    )
+  )
+}
+toc_outer <- Sys.time()
+print(toc_outer-tic_outer)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r, eval=FALSE, include=FALSE}
+run_apsimx_for_gps <- function(
+    lon = -90.76036,
+    lat = 34.72952,
+    year = '2014',
+    met_dir = './output/00.04_apsimx_sim/power/',
+    ssurgo_dir = './output/00.04_apsimx_sim/ssurgo/',
+    planting_date = '1-Apr',
+    cultivar = 'A_80',
+    base_file = "BasicSimulation.apsimx"
+    ){
+  # lon = -90.76036
+  # lat = 34.72952
+  # year = '2014'
+  # met_dir = './output/00.04_apsimx_sim/power/'
+  # ssurgo_dir = './output/00.04_apsimx_sim/ssurgo/'
+  # planting_date = '1-Apr'
+  # cultivar = 'A_80'
+  # base_file = "BasicSimulation.apsimx"
+  
+  # Make sure there's weather data to use
+  daterange = c(paste0(year, '-01-01'), paste0(year, '-12-31'))
+  
+  cache_apsimx_power(
+    lonlat = c(lon, lat),
+    dates = daterange,
+    dir_path = met_dir,
+    force = FALSE,
+    delay = 0
+  )
+  
+  met_file <- paste(lon, '_', lat, '_', daterange[1], '_', daterange[2], '.met', sep = '')
+  
+  # Lookup ssurgo data
+  cache_apsimx_ssurgo(
+    lonlat = c(lon, lat),
+    dir_path = ssurgo_dir, 
+    force = FALSE,
+    delay = 0 # add courtesy delay if batch downloading. 
+  )
+  
+  ssurgo_file <- paste(lon, '_', lat, '.RDS', sep = '')
+  
+  # Run 
+  res <- modify_and_run_apsimx(
+    met_path = paste0(met_dir, met_file),
+    clock_start = paste0(daterange[1], 'T00:00:00'),
+    clock_end = paste0(daterange[2], 'T00:00:00'),
+    ssurgo_path = paste0(ssurgo_dir, ssurgo_file),
+    planting_date = planting_date,
+    cultivar = cultivar,
+    base_file = base_file)
+  
+  # if there was an issue, return an empty df
+  if(nrow(res) == 0){
+    res <- data.frame(
+    CheckpointID = NA,SimulationID = NA,Zone = NA,Clock.Today = NA,
+    Maize.AboveGround.Wt = NA,Maize.LAI = NA, yield_Kgha = NA,Date = NA)
+  }
+  
+  return(cbind(data.frame(lon, lat, year, planting_date, cultivar, base_file), res))
+}
+
+
+
+
+```
+
+
+
+```{r, eval=FALSE, include=FALSE check lon lat}
+# do all gps locations in the g2fc work?
+
+res <- do.call(
+  rbind,
+  map(seq(1, nrow(gps)), function(i){
+    print(i)
+    try(
+      run_apsimx_for_gps(
+        lon = gps[i, 'lon'],
+        lat = gps[i, 'lat'],
+        year = '2014',
+        met_dir = './output/00.04_apsimx_sim/power/',
+        ssurgo_dir = './output/00.04_apsimx_sim/ssurgo/',
+        planting_date = '1-Apr',
+        cultivar = 'A_80',
+        base_file = "BasicSimulation.apsimx")
+    )
+  }
+  )
+)
+
+
+gps %>% dim()
+res %>% dim()
+
+# load United States state map data
+MainStates <- map_data("state")
+ggplot() +
+  geom_polygon( data=MainStates, aes(x=long, y=lat, group=group),
+                color="black", fill="white" )+
+  geom_point(data = gps, aes(x = lon, y = lat), color = 'black', shape=1, size = 2, alpha = 0.3)+
+  geom_point(data = res, aes(x = lon, y = lat, color = yield_Kgha/1000), size = 2, alpha = 0.3)
+```
+
+```{r, eval=FALSE, include=FALSE check year}
+
+# constrain to a single gps position
+gps <- gps[1, ]
+
+
+gps <- cbind(gps, 
+             expand.grid(
+               year = as.character(2014:2015),
+                # there's a wide planting range so I should cast a wide net here.
+                # 1-Mar, 2-Jun
+                # doy 50 -> 160
+                #as.Date(160, origin = "2016-01-01")
+               doy = seq(50, 150, 50),
+               cultivar = c('A_80', 'A_90')
+              )
+             )
+# get date
+gps$planting_date <- as.Date(gps$doy, origin = paste0(gps$year, '-01-01'))
+# convert to day-month format
+gps$planting_date <- unlist(
+  map(str_split(gps$planting_date, '-'), function(e){
+    paste0(e[3], '-', month.abb[as.numeric(e[2])])
+}))
+
+
+
+res <- do.call(
+  rbind,
+  map(seq(1, nrow(gps)), function(i){
+    print(i)
+    try(
+      run_apsimx_for_gps(
+        lon = gps[i, 'lon'],
+        lat = gps[i, 'lat'],
+        year = gps[i, 'year'],
+        met_dir = './output/00.04_apsimx_sim/power/',
+        ssurgo_dir = './output/00.04_apsimx_sim/ssurgo/',
+        planting_date = gps[i, 'planting_date'],
+        cultivar = gps[i, 'cultivar'],
+        base_file = "BasicSimulation.apsimx")
+    )
+  }
+  )
+)
+
+full_join(res, gps) %>% 
+  ggplot()+
+  geom_segment(aes(x = doy, xend = doy, 
+                   y = 0, yend = yield_Kgha, 
+                   color = year), size = 3, alpha = 0.3)+
+  geom_line(aes(x = doy, 
+                 y = yield_Kgha, 
+                  color = year), size = 1)+
+  geom_point(aes(x = doy, 
+                 y = yield_Kgha, 
+                  color = year), shape = '-', size = 5)+
+  facet_grid(.~cultivar)
+
+
+
+```
+
+
+
+
+```{r, eval=FALSE, include=FALSE}
+gps_grid <- read.csv('./output/gps_grid.csv')
+gps <- gps_grid
+# lats <- unique(gps$lat)
+# lats <- lats[seq(1, length(lats), by = 2)]
+# gps <- gps[(gps$lat %in% lats), ]
+# gps <- gps[seq(1, nrow(gps), by = 3), ]
+
+
+
+gps <- cbind(gps, 
+             expand.grid(
+               year = '2014',
+               doy = 150,
+               cultivar = c('A_80')
+              )
+             )
+# get date
+gps$planting_date <- as.Date(gps$doy, origin = paste0(gps$year, '-01-01'))
+# convert to day-month format
+gps$planting_date <- unlist(
+  map(str_split(gps$planting_date, '-'), function(e){
+    paste0(e[3], '-', month.abb[as.numeric(e[2])])
+}))
+
+print(dim(gps))
+
+save_path <- paste0(cache_path, 'gps_grid/')
+ensure_dir_path_exists(save_path)
+
+for(i in seq(1, nrow(gps))){
+  save_name <- paste0(paste(gps[i, c('lon', 'lat', 'year', 'planting_date', 'cultivar')], 
+                          collapse = '_'),'.csv')
+  
+  if (file.exists(paste0(save_path, save_name))){
+    # do nothing
+  } else {
+    print(i)
+    res <- run_apsimx_for_gps(
+      lon = gps[i, 'lon'],
+      lat = gps[i, 'lat'],
+      year = as.character(gps[i, 'year']),
+      met_dir = './output/00.04_apsimx_sim/power/',
+      ssurgo_dir = './output/00.04_apsimx_sim/ssurgo/',
+      planting_date = gps[i, 'planting_date'],
+      cultivar = gps[i, 'cultivar'],
+      base_file = "BasicSimulation.apsimx")
+    
+    write.csv(res, paste0(save_path, save_name))  
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+tic <- Sys.time()
+res <- do.call(
+  rbind, 
+  map(seq(1, nrow(gps)), function(i){
+    print(i)
+    try(
+      run_apsimx_for_gps(
+        lon = gps[i, 'lon'],
+        lat = gps[i, 'lat'],
+        year = '2014',
+        met_dir = './output/00.04_apsimx_sim/power/',
+        ssurgo_dir = './output/00.04_apsimx_sim/ssurgo/',
+        planting_date = '1-May',
+        cultivar = 'A_80',
+        base_file = "BasicSimulation.apsimx")
+    )
+  }
+  )
+)
+toc <- Sys.time()
+print(toc - tic)
+
+ggplot() + 
+  geom_polygon( data=MainStates, aes(x=long, y=lat, group=group),
+                color="black", fill="white" )+
+  geom_point(data = gps, aes(x = lon, y = lat), color = 'black', shape=1, size = 2, alpha = 0.3)+
+  geom_point(data = res, aes(x = lon, y = lat, color = yield_Kgha/1000), size = 2, alpha = 0.3)
+
+```
+
+
+
+## Working with FirstSimulation
+
+```{r, eval=FALSE, include=FALSE}
+maize_result_1 = apsimx(
+  file = "BasicSimulation.apsimx", # cannot be  the path
+  value = "report")
+
+# for ploting multiples
+maize_result_1$Sim = 'Original'
+
+ggplot(data = maize_result_1, aes(x = Date, y = yield_Kgha)) + 
+  geom_line()+
+  geom_point()+
+  theme_light()
+```
+
+Inspect the soil profile that I want to change.
+
+```{r, eval=FALSE, include=FALSE}
+inspect_apsimx("BasicSimulation.apsimx", src.dir = ".",
+               node = "Soil"
+               # , soil.child = "Organic"
+               )
+```
+
+
+## Swap soil parameters
+
+
+```{r, eval=FALSE, include=FALSE}
+require(soilDB)
+require(sp)
+require(sf)
+require(spData)
+
+# Get Iowan soil at lat 42.049, lon -93.4345 (should be similar to the existing entry)
+surgo_dat <- get_ssurgo_soil_profile(lonlat = c(-93.4345, 42.049))
+
+edit_apsimx_replace_soil_profile(
+  file = "BasicSimulation.apsimx",
+  src.dir = ".",
+  soil.profile = surgo_dat[[1]], 
+  edit.tag = "-2",
+)
+
+maize_result_2 = apsimx(
+  file = "FirstSimulation-2.apsimx", # cannot be  the path
+  value = "report")
+
+
+maize_result_2$Sim = 'Iowa SSURGO'
+
+
+
+# Columbia MO
+como_lonlat <- c(-92.328636, 38.951561)
+surgo_dat <- get_ssurgo_soil_profile(lonlat = como_lonlat)
+
+edit_apsimx_replace_soil_profile(
+  file = "BasicSimulation.apsimx",
+  src.dir = ".",
+  soil.profile = surgo_dat[[1]], 
+  edit.tag = "-3",
+)
+
+maize_result_3 = apsimx(
+  file = "FirstSimulation-3.apsimx", # cannot be  the path
+  value = "report")
+
+
+maize_result_3$Sim = 'COMO SSURGO'
+
+
+M <- do.call(rbind, list(maize_result_1, maize_result_2, maize_result_3))
+ggplot(data = M, aes(x = Date, y = yield_Kgha, color = Sim)) + 
+  geom_line()+
+  geom_point()+
+  theme_light()+
+  scale_color_manual(values = c('cornflowerblue', 'DarkGray', 'Black'))
+```
+
+```{r, eval=FALSE, include=FALSE}
+# now swap using pre-downloaded ones.
+
+
+list.files('./output/usa_grid/apsimx_ssurgo/')
+
+
+M <- readRDS(paste0('./output/usa_grid/apsimx_ssurgo/', "-117.120232582092_42.9967880249023.RDS"))
+
+edit_apsimx_replace_soil_profile(
+  file = "BasicSimulation.apsimx",
+  src.dir = ".",
+  soil.profile = M[[1]], 
+  edit.tag = "-DL1",
+)
+
+maize_result_DL1 = apsimx(
+  file = "FirstSimulation-DL1.apsimx", # cannot be  the path
+  value = "report")
+
+ggplot(data = maize_result_DL1, aes(x = Date, y = yield_Kgha)) + 
+  geom_line()+
+  geom_point()+
+  theme_light()
+
+```
+
+```{r, eval=FALSE, include=FALSE}
+inspect_apsimx("BasicSimulation.apsimx", src.dir = ".",
+               node = "Crop"
+               # , soil.child = "Organic"
+               )
+
+
+edit_apsimx(
+  file = "BasicSimulation.apsimx",
+  src.dir = ".",
+  node = 'Crop', 
+  parm = 'SowDate',
+  value = '1-Apr',
+  # overwrite = TRUE,
+  edit.tag = '.rmme'
+)
+
+
+inspect_apsimx("FirstSimulation.rmme.apsimx", src.dir = ".",
+               node = "Manager"
+               # , soil.child = "Organic"
+               )
+
+# change fertilize at sowing?
+
+
+```
+
+
+
+## Modify weather 
+
+```{r, eval=FALSE, include=FALSE}
+# ensure_dir_path_exists <- function(
+#     dir_path
+# ){
+#   if (dir.exists(dir_path)){
+#     # do nothing
+#   } else {
+#     dir.create(dir_path, recursive = T)
+#   }
+# }
+# 
+# require(daymetr)
+# cache_apsimx_daymet <- function(
+#     lonlat = c(-93.4345, 42.049),
+#     years = c(2013, 2013),
+#     dir_path = './daymet', 
+#     force = FALSE,
+#     delay = 0 
+#     ){
+#   ensure_dir_path_exists(dir_path = dir_path)
+#   save_name <- paste(c(paste(c(lonlat, years), collapse = '_'), '.met'), collapse = '')
+#   
+#   save_path <- paste(dir_path, save_name, sep = '/')
+#   if( !file.exists(save_path) ){
+#     Sys.sleep(delay)
+#     get_daymet2_apsim_met(
+#       lonlat = lonlat, 
+#       years = years, 
+#       wrt.dir = dir_path, 
+#       filename = save_name
+#       )
+#   }
+# }
+# 
+# require(nasapower)
+# cache_apsimx_power <- function(
+#     lonlat = c(-93.4345, 42.049),
+#     dates = c('2013-01-01', '2013-12-31'),
+#     dir_path = './power', 
+#     force = FALSE,
+#     delay = 0 
+#     ){
+#   ensure_dir_path_exists(dir_path = dir_path)
+#   save_name <- paste(c(paste(c(lonlat, dates), collapse = '_'), '.met'), collapse = '')
+#   
+#   save_path <- paste(dir_path, save_name, sep = '/')
+#   if( !file.exists(save_path) ){
+#     Sys.sleep(delay)
+#     get_power_apsim_met(
+#       lonlat = lonlat, 
+#       dates = dates, 
+#       wrt.dir = dir_path, 
+#       filename = save_name
+#       )
+#   }
+# }
+
+
+## NASA POWER ====
+
+# cache_apsimx_power(
+#   lonlat = como_lonlat,
+#   dates = c('2013-01-01', '2013-12-31')
+#   )
+
+# -92.328636_38.951561_2013-01-01_2013-12-31.met
+
+
+inspect_apsimx(file = 'FirstSimulation-3.apsimx',
+              node = 'Weather')
+
+edit_apsimx(
+  file = "FirstSimulation-3.apsimx",
+  src.dir = ".",
+  node = 'Weather', 
+  # value = './power/-92.328636_38.951561_2013-01-01_2013-12-31.met',
+  value = './output/usa_grid/apsimx_power/-100.7471915_41.0514495_1980_2022.met',
+  edit.tag = ".power",
+)
+
+edit_apsimx(
+  file = "FirstSimulation-3.power.apsimx",
+  src.dir = ".",
+  node = 'Clock', 
+  parm = 'Start',
+  value = '2013-01-01T00:00:00',
+  overwrite = TRUE,
+  # edit.tag = '.2'
+)
+
+edit_apsimx(
+  file = "FirstSimulation-3.power.apsimx",
+  src.dir = ".",
+  node = 'Clock', 
+  parm = 'End',
+  value = '2014-01-01T00:00:00',
+  overwrite = TRUE
+)
+
+inspect_apsimx(file = 'FirstSimulation-3.power.apsimx',
+              node = 'Clock',
+              parm = 'Start'
+              )
+
+
+
+maize_result_4 = apsimx(
+  file = "FirstSimulation-3.power.apsimx",
+  value = "report")
+
+maize_result_4$Sim = 'COMO SSURGO POWER'
+
+
+## ONRL DAYMET ====
+
+# cache_apsimx_daymet(
+#   lonlat = como_lonlat,
+#   years = c(2013, 2013)
+# )
+
+# -92.328636_38.951561_2013_2013.met
+
+edit_apsimx(
+  file = "FirstSimulation-3.apsimx",
+  src.dir = ".",
+  node = 'Weather', 
+  # value = './daymet/-92.328636_38.951561_2013_2013.met',
+  value = './output/usa_grid/apsimx_daymet/-100.7471915_41.0514495_1980_2022.met',
+  edit.tag = ".daymet",
+)
+
+edit_apsimx(
+  file = "FirstSimulation-3.daymet.apsimx",
+  src.dir = ".",
+  node = 'Clock', 
+  parm = 'Start',
+  value = '2013-01-01T00:00:00',
+  overwrite = TRUE,
+  # edit.tag = '.2'
+)
+
+edit_apsimx(
+  file = "FirstSimulation-3.daymet.apsimx",
+  src.dir = ".",
+  node = 'Clock', 
+  parm = 'End',
+  value = '2014-01-01T00:00:00',
+  overwrite = TRUE
+)
+
+maize_result_5 = apsimx(
+  file = "FirstSimulation-3.power.apsimx",
+  value = "report")
+
+maize_result_5$Sim = 'COMO SSURGO DAYMET'
+
+
+
+M <- do.call(rbind, list(maize_result_3, maize_result_4, maize_result_5))
+ggplot(data = M, aes(x = Date, y = yield_Kgha, color = Sim)) + 
+  geom_line()+
+  geom_point()+
+  theme_light()+
+  scale_color_manual(values = c('cornflowerblue', 'DarkGray', 'Black'))
+```
+
+
+## What about swapping in/out cultivars?
+
+```{r, eval=FALSE, include=FALSE}
+
+inspect_apsimx(file = 'FirstSimulation-3.apsimx',
+              node = 'Crop')
+
+
+tempCultivars = c(
+'A_80', 'A_90', 'A_95', 'A_100', 'A_103', 'A_105', 'A_108', 'A_110', 'A_112', 'A_115', 'A_120', 'A_130',
+'Atrium',
+'B_80', 'B_90', 'B_95', 'B_100','B_103','B_105','B_108','B_110','B_112','B_115','B_120','B_130',
+'CG4141',
+# 'Deklab_XL82',
+# Error in `$<-.data.frame`(`*tmp*`, "Cultivar", value = "Deklab_XL82") : 
+#   replacement has 1 row, data has 0
+# In addition: There were 29 warnings (use warnings() to see them)
+'GH_5009',
+'GH_5019WX',
+'HY_110',
+'Hycorn_40',
+'Hycorn_53',
+'Katumani',
+'Laila',
+'LY_110',
+'Makueni',
+'malawi_local',
+'Melkassa',
+'mh12','mh16','mh17','mh18','mh19',
+'NSCM_41',
+'P1197',
+'Pioneer_3153','Pioneer_33M54','Pioneer_34K77','Pioneer_38H20','Pioneer_39G12','Pioneer_39V43',
+'r201','r215',
+'sc401','sc501','sc601','sc623','sc625',
+'sr52')
+
+
+cultivar_res_list <- map(
+  seq_along(tempCultivars),
+  function(i){
+    print(tempCultivars[i])
+    edit_apsimx(
+      file = "FirstSimulation-3.apsimx",
+      src.dir = ".",
+      node = 'Crop',
+      parm = 'CultivarName',
+      value = tempCultivars[i],
+      edit.tag = ".temp"
+      )
+    
+    maize_result_temp = apsimx(
+      file = "FirstSimulation-3.temp.apsimx",
+      value = "report")
+    
+    maize_result_temp$Cultivar <- tempCultivars[i]
+    
+    return(maize_result_temp)
+  }
+)
+
+do.call(rbind, cultivar_res_list) %>% 
+  ggplot(aes(Date, yield_Kgha, color = Cultivar))+
+  geom_line()+
+  geom_point()+
+  theme_light()
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r, eval=FALSE, include=FALSE}
+# Columbia MO 2013
+surgo_dat <- get_ssurgo_soil_profile(lonlat = c(-92.328636, 38.951561))
+
+edit_apsimx_replace_soil_profile(
+  file = "BasicSimulation.apsimx",
+  src.dir = ".",
+  soil.profile = surgo_dat[[1]], 
+  edit.tag = "-3",
+)
+
+maize_result_3 = apsimx(
+  file = "FirstSimulation-3-1.apsimx", # cannot be  the path
+  value = "report")
+
+
+maize_result_3$Sim = 'COMO SSURGO'
+```
+
+
+```{r, eval=FALSE, include=FALSE}
+
+
+require(daymetr)
+daymet_2013 <- get_daymet2_apsim_met(
+  lonlat = c(-92.328636, 38.951561), 
+  years = c(2013, 2013), 
+  wrt.dir = ".", 
+  filename = 'columbia2013.met'
+  )
+
+
+
+
+
+
+
+require(nasapower)
+get_power_apsim_met(lonlat = c(-93.4345, 42.049), 
+                      years = c(2013, 2013), 
+                      wrt.dir = "."#, 
+                      # filename = ''
+                      )
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
