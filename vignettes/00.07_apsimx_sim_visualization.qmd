@@ -1,0 +1,192 @@
+---
+title: "Untitled"
+format: html
+editor: source
+---
+
+
+```{r}
+library(tidyverse)
+
+cached_files <- list.files('../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/')
+cached_files <- cached_files[stringr::str_detect(cached_files, 'SimulateFactorial\\.csv$')]
+
+M <- do.call(rbind, map(cached_files, function(e){
+  read.csv(paste0('../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/', e))
+}))
+
+
+M
+```
+
+
+```{r}
+library(ggrastr)
+
+M %>% 
+  rename(lon = ith_lon, lat = ith_lat) %>% 
+  mutate(Failed = case_when(is.na(yield_Kgha)~TRUE, 
+                            !is.na(yield_Kgha)~FALSE)) %>% 
+  group_by(lon, lat) %>% 
+  summarize(yield_Kgha = mean(yield_Kgha, rm.na = T)) %>% 
+  ggplot(aes(lon, lat, color = Failed))+
+  rasterise(geom_point())
+```
+
+
+
+# G2F sites: 
+```{r}
+gps <- read.csv('../inst/extdata/gps_coords.csv')
+gps <- gps[!stringr::str_detect(gps[, 'Env'], '^ONH.+'), ]
+gps <- gps[!stringr::str_detect(gps[, 'Env'], '^GEH.+'), ]
+
+gps <- gps %>% 
+  rename(lat = Latitude_of_Field,
+         lon = Longitude_of_Field) %>% 
+  select(lat, lon) %>% 
+  distinct()
+
+
+```
+
+
+
+
+```{r}
+# gps <- read.csv('../data/00.01_setup_USA_env_gps_grid/gps_grid.csv')
+# 
+# # no seed needed here. This is just to make sure that the sampling order is random.
+# gps[['order']] <- sample(1:nrow(gps))
+# gps <- gps %>% arrange(order)
+
+```
+
+
+
+
+```{r}
+library(geodist)
+library(tidyverse)
+
+get_sampling_order <- function(M = gps[, c('lon', 'lat')]){
+  # M <- data.frame(expand.grid(lon = 1:10, lat = 1:10))
+  sample_order <- c(1)
+  dists <- geodist(M,  measure = 'geodesic')
+  
+  # for the first round we need to ignore distance to sampled points.
+  dists[dists == 0] <- NA
+  max_dist <- max(dists[1, ], na.rm = T)
+  # not using which.max because of na.rm
+  next_i = seq(1, ncol(dists))[dists[1, ] == max_dist]
+  next_i = next_i[!is.na(next_i)]
+  sample_order <- c(sample_order, next_i)
+  
+  for(iter in seq(1, (nrow(dists)-length(sample_order)))){
+    # now we want there to be 0 on the diagonal
+    dists[is.na(dists)] <- 0
+    # get min dist from sampled points
+    min_dists <- unlist(map(seq(1, ncol(dists)), function(i){
+      min(dists[sample_order, i], na.rm = T)
+    }))
+    # now which.max works again
+    next_i <- which.max(min_dists)
+    sample_order <- c(sample_order, next_i)
+  }
+  
+  # Add in sampling order
+  M['index'] <- 1:nrow(M)
+  M <- full_join(M,
+                 data.frame(
+                   index = 1:length(sample_order),
+                   order = sample_order))
+  return(M)
+}
+```
+
+```{r}
+# Test
+
+
+M <- get_sampling_order(M = data.frame(expand.grid(
+  lon = 1:5,
+  lat = 1:5)))
+
+library(gganimate)
+
+
+M <- M %>% arrange(order)
+
+do.call(rbind, map(unique(M$order), function(i){mutate(M[M$order <= i, ], order = i) })) %>% 
+  # mutate(order = as.factor(order)) %>% 
+  ggplot(aes(lon, lat))+
+    # geom_point(data = do.call(rbind, map(unique(M$order), function(i){mutate(M, order = i) })), shape = 1)+
+    geom_tile(fill = 'red')+
+    transition_states(order)
+
+```
+
+
+
+
+```{r}
+M <- get_sampling_order(M = gps[, c('lon', 'lat')])
+
+
+```
+
+
+```{r}
+
+M %>%
+  arrange(order) %>%
+  ggplot(aes(lon, lat))+
+  geom_path()+
+  geom_point(aes(color = order))
+
+```
+
+
+
+```{r}
+gps %>% 
+  ggplot(aes(lon, lat))+
+  geom_point()
+```
+
+
+```{r}
+library(gganimate)
+
+# M %>% 
+#   mutate(order = as.factor(order)) %>% 
+#   ggplot(aes(lon, lat))+
+#     geom_path()+
+#     geom_point()+ 
+#     transition_states(order)
+
+do.call(rbind, map(unique(M$order), 
+                   function(i){
+  mutate(M[M$order <= i, ], order = i) })) %>% 
+  mutate(order = as.factor(order)) %>% 
+  ggplot(aes(lon, lat))+
+  geom_point()+
+  # rasterise(geom_point())+
+  transition_states(order)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
