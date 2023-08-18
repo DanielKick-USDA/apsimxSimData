@@ -1,0 +1,121 @@
+---
+title: 00.02_download_env_db_entries
+format: html
+editor: source
+---
+
+```{r}
+library(tidyverse)
+library(apsimx)
+require(soilDB)
+require(sp)
+require(sf)
+require(spData)
+
+devtools::load_all()
+
+cache_path <- '../data/00.02_download_env_db_entries/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+
+```{r}
+# Note: This path should be updated and/or apsimNG should be containerized.
+# apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
+apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
+```
+
+## Download weather datasets
+```{r}
+# Add a courtesy delay between requests. Only applied once per cycle.
+rand_wait <- function(){10+abs(rnorm(1, mean = 0, sd = 6))}
+```
+
+### Genomes to Fields Locations
+```{r Observed G2F sites}
+# originally from 'EnvDL/notebook_artifacts/01.02_g2fc_imputation/gps_coords.csv'
+gps <- read.csv('../inst/extdata/gps_coords.csv')
+# Constrain to those sites in the USA
+gps <- gps[!stringr::str_detect(gps[, 'Env'], '^ONH.+'), ]
+gps <- gps[!stringr::str_detect(gps[, 'Env'], '^GEH.+'), ]
+
+gps <- gps %>% 
+  rename(lat = Latitude_of_Field,
+         lon = Longitude_of_Field) %>% 
+  select(lat, lon) %>% 
+  distinct()
+
+
+# cache_path <- './output/g2fc/'
+for(i in seq(1, nrow(gps))){
+  print(paste0(as.character(i), '/', as.character(nrow(gps))))
+  try(
+    cache_apsimx_ssurgo(
+      lonlat = unlist(gps[i, c('lon', 'lat')]),
+      dir_path = paste0(cache_path, 'g2fc/', 'apsimx_ssurgo'), 
+      force = FALSE,
+      delay = rand_wait()
+    )
+  )
+  try(
+    cache_apsimx_daymet(
+      lonlat = unlist(gps[i, c('lon', 'lat')]),
+      years = c(1980, 2022),
+      dir_path = paste0(cache_path, 'g2fc/', 'apsimx_daymet'), 
+      force = FALSE,
+      delay = 0
+    )
+  )
+  try(
+    cache_apsimx_power(
+      lonlat = unlist(gps[i, c('lon', 'lat')]),
+      dates = c('1981-01-01', '2022-12-31'), 
+      dir_path = paste0(cache_path, 'g2fc/', 'apsimx_power'), 
+      force = FALSE,
+      delay = 0
+    )
+  )
+}
+```
+
+
+### Approxmiate grid over USA
+```{r}
+gps_grid <- read.csv('../data/00.01_setup_USA_env_gps_grid/gps_grid.csv')
+gps_grid %>% 
+  group_by(state) %>% 
+  tally()
+
+gps <- gps_grid
+
+# for bulk downloading everything is wrapped in try. Some of the locations will not have SSURGO data. 
+for(i in seq(1, nrow(gps))){
+  print(paste0(as.character(i), '/', as.character(nrow(gps))))
+  try(
+    cache_apsimx_ssurgo(
+      lonlat = unlist(gps[i, c('lon', 'lat')]),
+      dir_path = paste0(cache_path, 'gps_grid/', 'apsimx_ssurgo'), 
+      force = FALSE,
+      delay = rand_wait()
+    )
+  )
+  try(
+    cache_apsimx_daymet(
+      lonlat = unlist(gps[i, c('lon', 'lat')]),
+      years = c(1980, 2022),
+      dir_path = paste0(cache_path, 'gps_grid/', 'apsimx_daymet'), 
+      force = FALSE,
+      delay = 0
+    )
+  )
+  try(
+    cache_apsimx_power(
+      lonlat = unlist(gps[i, c('lon', 'lat')]),
+      dates = c('1981-01-01', '2022-12-31'), 
+      dir_path = paste0(cache_path, 'gps_grid/', 'apsimx_power'), 
+      force = FALSE,
+      delay = 0
+    )
+  )
+}
+```
