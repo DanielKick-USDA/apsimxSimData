@@ -452,7 +452,10 @@ wrapper_apsimx_factorial <- function(
     write.csv(res, paste0(save_path,save_name))
   }
 }
+```
 
+
+```{r}
 # demo
 # soils_i <- closest_soils_list_entry(ith_lon = -86.52960,
 #                                     ith_lat = 34.72952)
@@ -472,17 +475,46 @@ wrapper_apsimx_factorial <- function(
 
 ```{r}
 # this takes a while to run.
+soils_i <- closest_soils_list_entry(ith_lon = -86.52960,
+                                    ith_lat = 34.72952)
+wrapper_apsimx_factorial(
+    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+    factorial_file = 'SimulateFactorial.apsimx',
+    input_file_type = 'factorial',
+    ith_lon = -86.52960,
+    ith_lat = 34.72952,
+    ith_year_start = '1984',
+    ith_year_end = '2022'
+)
+```
+
+```{r}
+# demo with daily yield measurements
+# soils_i <- closest_soils_list_entry(ith_lon = -86.52960,
+#                                     ith_lat = 34.72952)
 # wrapper_apsimx_factorial(
+#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#     save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+#     factorial_file = 'SimulateBasicDaily_-90_34.apsimx',
+#     input_file_type = 'basic',
 #     ith_lon = -86.52960,
 #     ith_lat = 34.72952,
-#     save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
-#     factorial_file = 'SimulateFactorial.apsimx',
-#     ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
-#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
 #     ith_year_start = '1984',
-#     ith_year_end = '2022',
-#     ith_base_file = "SimulateBasic_-90_34.apsimx"   
+#     ith_year_end = '2022'
 # )
+# 
+# # Visualize
+# M <- read.csv('../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/-86.5296__34.72952__1984__2022__1__SimulateBasicDaily_-90_34.csv')
+# M <- M %>% as_tibble()
+# 
+# M['Year'] <- str_extract(M$Date, '\\d+')
+# M['DOY'] <- lubridate::ymd(M$Date) - lubridate::ymd(paste0(M$Year, '-01-01'))
+# 
+# M %>% 
+#   filter(yield_Kgha != 0) %>% 
+#   ggplot(aes(x = DOY, y = yield_Kgha, group = Year))+
+#   geom_line()
 ```
 
 
