@@ -20,6 +20,7 @@ require(sf)
 require(spData)
 
 devtools::load_all()
+# setwd(paste0(getwd(), '/vignettes'))
 ```
 
 ```{r}
@@ -92,6 +93,11 @@ run_apsimx_for_gps(
     only_dl_data = TRUE
   )
 ```
+
+
+
+
+
 
 Use a simple experiment to get the soil data in a apsimx compatible format.
 ```{r}

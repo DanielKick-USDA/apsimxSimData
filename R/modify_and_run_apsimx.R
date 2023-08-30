@@ -24,7 +24,9 @@ modify_and_run_apsimx <- function(
     planting_date = '1-Apr',
     cultivar = 'A_80',
     base_file = "BasicSimulation.apsimx",
-    src.dir = "./"
+    src.dir = "./",
+    save_modifications = FALSE,
+    save_path = ''
 ){
   # met_path = './power/-92.328636_38.951561_2013-01-01_2013-12-31.met'
   # clock_start = '2013-01-01T00:00:00'
@@ -105,9 +107,13 @@ modify_and_run_apsimx <- function(
     file = temp_file,
     src.dir = src.dir,
     value = "report")
+
+
+  if(save_modifications){
+    file.copy(paste0(src.dir, base_file),
+              save_path)
+  }
   # remove temp file
-
-
   unlink(paste0(src.dir, temp_file))
   return(res)
 }

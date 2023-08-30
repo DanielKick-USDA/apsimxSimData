@@ -1,5 +1,5 @@
 ---
-title: "00.04_apsimx_sim"
+title: "Regression tests for Editing APSIMX files."
 format: html
 editor: source
 ---
@@ -19,6 +19,7 @@ require(sf)
 require(spData)
 
 devtools::load_all()
+setwd(paste0(getwd(), '/vignettes'))
 ```
 
 ```{r}
@@ -247,162 +248,7 @@ ggplot(fact_sims, aes(x = Date, y = yield_Kgha, color = Genotype, group = SowDat
 ```
 
 
-```{r}
-# file.copy("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34.apsimx",
-#           "../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-temp.apsimx")
-# 
-# edit_apsimx_replace_soil_profile(  
-#   'SimulateFactorial_-90_34.apsimx', 
-#   src.dir = '../data/00.05_apsimx_sim_en_masse',
-#   soil.profile = surgo_dat[[1]],
-#   edit.tag = edit_tag
-# )
-# 
-# res = apsimx(
-#   file = 'SimulateFactorial_-90_34-temp.apsimx',
-#   src.dir = use_src.dir,
-#   value = "report")
-# 
-# 
-# res
-# 
-# 
-# 
-# inspect_apsimx_replacement(
-#   'SimulateFactorial_-90_34-temp.apsimx', 
-#   src.dir = '../data/00.05_apsimx_sim_en_masse',
-#   root = list("Experiment1"), 
-#   node = 'Experiment',
-#   node.child = 'ExperimentBase',
-#   node.subchild = 'Weather')
-# 
-# inspect_apsimx(
-#   'SimulateFactorial_-90_34-temp.apsimx', 
-#   src.dir = '../data/00.05_apsimx_sim_en_masse',
-#   root = list("Experiment1", 'Experiment', 'ExperimentBase'),
-#   node = "Weather")
-# 
-# inspect_apsimx(
-#   'SimulateFactorial_-90_34-temp.apsimx', 
-#   src.dir = '../data/00.05_apsimx_sim_en_masse',
-#   root = list("Experiment1", 'Experiment', 'ExperimentBase'),
-#   node = 'Weather'
-#   )
-# 
-# 
-# 
-# edit_apsimx('SimulateFactorial_-90_34-temp.apsimx',
-#             src.dir = '../data/00.05_apsimx_sim_en_masse', 
-#             wrt.dir = '../data/00.05_apsimx_sim_en_masse',
-#             root = list("Experiment1", 'Experiment', 'ExperimentBase'),
-#             node = 'Weather',
-#             
-#             value = "Ames.met",
-#             overwrite = TRUE)
-# 
-# 
-# 
-# # edit_apsimx("Factorial.apsimx", 
-# #             src.dir = extd.dir, wrt.dir = tmp.dir,
-# #             root = c("RangeExperiment", "Base2"),
-# #             node = "Weather", 
-# #             value = "Ames.met")
-
-```
-
-```{r}
-
-# 
-# # file.copy("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34.apsimx",
-# #           "../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-temp.apsimx")
-# 
-# library(jsonlite)
-# # jsonlite::read_json('./BasicSimulation-demo-experiment.apsimx')
-# 
-# raw_json <- jsonlite::read_json("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34.apsimx")
-# 
-# # horribly, this path is something that would need to be set _every_ time the base experiment file changes.
-# # str(raw_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[2]]$FileName, max.level = 2)
-# current_met_value <- raw_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[2]]$FileName
-# current_met_value <- unlist(str_split(current_met_value, pattern = '\\\\'))
-# 
-# current_met_value[length(current_met_value)] <- '-86.5296_34.72952_1984-01-01_2022-12-31.met'
-# 
-# new_met_value <- paste(current_met_value, collapse = '\\')
-# 
-# raw_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[2]]$FileName <- new_met_value
-# 
-# 
-# 
-# jsonlite::write_json(x = raw_json, '../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-temp.apsimx')
-# 
-# 
-# 
-# res = apsimx(
-#   file = 'SimulateFactorial_-90_34-temp.apsimx',
-#   src.dir = use_src.dir,
-#   value = "report")
-# 
-# unlink("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34-temp.apsimx")
-# 
-# # without changes will overlap with -90_34
-# # looks like these are the same...
-# ggplot(fact_sims[fact_sims$met == '-90_34',], aes(x = Date, y = yield_Kgha, color = Genotype, group = SowDate))+
-#   geom_point()+
-#   geom_point(data = res, shape = 1, color = 'red')+
-#   facet_grid(.~met)
-```
-
-
-
 ## Regression Test 4: Change factorial experiment's soil
-```{r}
-      # # use diff relative to iowa to find the lines that need to be changed!!
-      # 
-      # # From above -- make file with desired soil.
-      # base_file = "SimulateBasic_-90_34.apsimx"
-      # use_src.dir = "../data/00.05_apsimx_sim_en_masse/"
-      # ssurgo_path = '../data/00.05_apsimx_sim_en_masse/ssurgo/-86.5296_34.72952.RDS'
-      # 
-      # edit_tag = '-temp'
-      # temp_file <- paste0(str_replace(base_file, '\\.apsimx$', ''), edit_tag, '.apsimx')
-      # 
-      # # Make edits ----
-      # ## Soil ====
-      # surgo_dat <- readRDS(ssurgo_path)
-      # 
-      # edit_apsimx_replace_soil_profile(
-      #   file = base_file,
-      #   src.dir = use_src.dir,
-      #   soil.profile = surgo_dat[[1]],
-      #   edit.tag = edit_tag
-      # )
-      # 
-      # # Read in the files under consideration 
-      # simBase_text <- read_file(paste0(use_src.dir, base_file))
-      # simAlt_text <- read_file(paste0(use_src.dir, temp_file))
-      # simFact_text <- read_file("../data/00.05_apsimx_sim_en_masse/SimulateFactorial_-90_34.apsimx")
-      # 
-      # # now remove it.
-      # unlink(paste0(use_src.dir, temp_file))
-      # 
-      # 
-      # files_text <- list('base'= simBase_text, 
-      #                    'alt' = simAlt_text,
-      #                    'fact'= simFact_text)
-      # 
-      # # maybe I can (fake) diff the json easier than the text ... if it has the same number of entries in both
-      # files_text <- map(files_text, function(e){unlist(str_split(e, '\\n'))})
-
-
-```
-
-
-
-
-
-
-
 
 Make a simple file with the soil data I want to use. 
 ```{r}
@@ -426,10 +272,6 @@ edit_apsimx_replace_soil_profile(
 
 # I manually copied the soil from this one into SimulateFactorial_-90_34_soil_-86_34.apsimx which began as SimulateFactorial_-90_34.apsimx
 ```
-
-
-
-
 
 
 ```{r}

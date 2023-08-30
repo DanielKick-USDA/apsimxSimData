@@ -17,7 +17,9 @@ cache_apsimx_ssurgo <- function(
     lonlat = c(-93.4345, 42.049),
     dir_path = '../data/env_data/apsimx_ssurgo',
     force = FALSE,
-    delay = 0
+    delay = 0,
+    fix = FALSE,
+    check = TRUE
 ){
   ensure_dir_path_exists(dir_path = dir_path)
   save_name <- paste(c(paste(lonlat, collapse = '_'), '.RDS'), collapse = '')
@@ -26,7 +28,9 @@ cache_apsimx_ssurgo <- function(
   if( ((!file.exists(save_path))|(force == TRUE)) ){
     # Check if file exists or should be downloaded
     Sys.sleep(delay)
-    surgo_profile <- apsimx::get_ssurgo_soil_profile(lonlat = lonlat)
+    surgo_profile <- apsimx::get_ssurgo_soil_profile(lonlat = lonlat,
+                                                     fix = fix,
+                                                     check = check)
     saveRDS(surgo_profile, file = save_path)
   }
 }

@@ -16,6 +16,8 @@ library(sf)
 library(spData)
 # for geodist
 library(geodist)
+
+setwd(paste0(getwd(), '/vignettes'))
 ```
 
 ```{r}

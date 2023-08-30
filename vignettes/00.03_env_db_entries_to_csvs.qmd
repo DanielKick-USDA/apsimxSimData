@@ -5,12 +5,13 @@ editor: source
 ---
 
 ```{r}
-'output/g2fc/apsimx_daymet/'
-'output/g2fc/apsimx_power/'
-'output/g2fc/apsimx_ssurgo/'
+# useful functions but not in use. 
 library(tidyverse)
+setwd(paste0(getwd(), '/vignettes'))
+```
 
 
+```{r}
 save_as_db <- function(save_path, df, table_name, overwrite_df = TRUE){
   # https://cran.r-project.org/web/packages/RSQLite/vignettes/RSQLite.html
   library(DBI)
@@ -114,7 +115,7 @@ apsimx_met_to_table <- function(file_path = 'output/g2fc/apsimx_daymet/-100.7471
 }
 ```
 
-```{r daymet save}
+```{r, eval = FALSE, daymet save}
 for( dir_path in c('output/g2fc/apsimx_daymet/', 
                    'output/usa_grid/apsimx_daymet/')){
   # dir_path = 'output/g2fc/apsimx_daymet/'
@@ -137,7 +138,7 @@ for( dir_path in c('output/g2fc/apsimx_daymet/',
 }
 ```
 
-```{r power save}
+```{r, eval = FALSE, power save}
 for( dir_path in c('output/g2fc/apsimx_power/', 
                    'output/usa_grid/apsimx_power/')){
 

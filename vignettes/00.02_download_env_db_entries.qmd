@@ -5,6 +5,7 @@ editor: source
 ---
 
 ```{r}
+# useful for batch downloading but have focused more on downloading in 
 library(tidyverse)
 library(apsimx)
 require(soilDB)
@@ -13,6 +14,7 @@ require(sf)
 require(spData)
 
 devtools::load_all()
+setwd(paste0(getwd(), '/vignettes'))
 
 cache_path <- '../data/00.02_download_env_db_entries/'
 ensure_dir_path_exists(dir_path = cache_path)
@@ -21,7 +23,6 @@ ensure_dir_path_exists(dir_path = cache_path)
 
 ```{r}
 # Note: This path should be updated and/or apsimNG should be containerized.
-# apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
 apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
 ```
 
@@ -80,7 +81,8 @@ for(i in seq(1, nrow(gps))){
 
 
 ### Approxmiate grid over USA
-```{r}
+```{r eval=FALSE}
+# Not Run!
 gps_grid <- read.csv('../data/00.01_setup_USA_env_gps_grid/gps_grid.csv')
 gps_grid %>% 
   group_by(state) %>% 

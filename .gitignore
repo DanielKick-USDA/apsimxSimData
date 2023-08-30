@@ -1,8 +1,15 @@
+
+# remove these:
+data/00.99_test_soil_fix/*
+
+
+# Standard rproj
 .Rproj.user
 .Rhistory
 .RData
 .Ruserdata
 
+#
 *.met
 *.RDS
 
@@ -30,3 +37,4 @@ data/00.06_apsimx_sim_factorial_gps_grid/apsimx_audits/*
 # temp files
 data/00.06_apsimx_sim_factorial_gps_grid/SimulateBasic_-90_34_temp_soil.apsimx
 data/00.06_apsimx_sim_factorial_gps_grid/SimulateFactorial_Tiny_temp_soil.apsimx
+

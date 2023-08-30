@@ -8,8 +8,8 @@ editor: source
 
 ```{r}
 library(tidyverse)
-
-g2f_cache_path = './data/00.04_apsimx_sim/g2f_cache/'
+setwd(paste0(getwd(), '/vignettes'))
+g2f_cache_path = '../data/00.04_apsimx_sim/g2f_cache/'
 
 
 res <- do.call(rbind, map(list.files(g2f_cache_path), function(e){
@@ -111,6 +111,6 @@ my_gif <- ggplot() +
 
 my_gif
 
-anim_save('./demogif.gif', animation = my_gif)
+# anim_save('./demogif.gif', animation = my_gif)
 ```
 
