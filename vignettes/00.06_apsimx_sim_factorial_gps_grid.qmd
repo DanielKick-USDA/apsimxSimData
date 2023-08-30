@@ -20,7 +20,7 @@ require(sf)
 require(spData)
 
 devtools::load_all()
-# setwd(paste0(getwd(), '/vignettes'))
+if (!str_detect(getwd(), '/vignettes$')){setwd(paste0(getwd(), '/vignettes'))}
 ```
 
 ```{r}
@@ -229,27 +229,26 @@ replace_soil_in_json <- function(
 ```
 
 ```{r}
-ith_lon = -86.52960
-ith_lat = 34.72952
-
+# Demo
+# ith_lon = -86.52960
+# ith_lat = 34.72952
 
 # From lon/lat get the closest soil
 
-soils_i <- closest_soils_list_entry(ith_lon = ith_lon,
-                         ith_lat = ith_lon)
+# soils_i <- closest_soils_list_entry(ith_lon = ith_lon, ith_lat = ith_lon)
 # soils_df[soils_i, ]
-soils_list[[soils_i]]
-
-
+# soils_list[[soils_i]]
 
 # make a temp.apsimx with the desired soil
 # basic version
-replace_soil_in_json(
-  input_json_file = jsonlite::read_json(paste0(cache_path, 'SimulateBasic_-90_34.apsimx')),
-  replacement_soil = soils_list[[1]],
-  input_file_type = 'basic', # 'factorial'
-  output_dir = cache_path
-  )
+# replace_soil_in_json(
+#   input_json_file = jsonlite::read_json(paste0(cache_path, 'SimulateBasic_-90_34.apsimx')),
+#   replacement_soil = soils_list[[1]],
+#   input_file_type = 'basic', # 'factorial'
+#   output_dir = cache_path
+#   )
+# 
+# unlink(paste0(output_dir, 'temp.apsimx'))
 
 # # factorial version
 # replace_soil_in_json(
@@ -263,52 +262,151 @@ replace_soil_in_json(
 ```
 
 
-
-
-
-
-
-
 ```{r}
-res <- apsimx(
-    file = 'SimulateBasic_-90_34.apsimx',
-    src.dir = '../data/soil_bespoke/',
-    value = "all")
-
-res$Report
+# Warning! needs soils_list, soils_df in global scope
+modify_and_run_apsimx_temp <- function(
+    ith_lon = -86.52960,
+    ith_lat = 34.72952,
+    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    factorial_file = 'SimulateFactorial_Tiny.apsimx',  
+    input_file_type = 'factorial', # 'basic'
+    ith_year_start = '1984',
+    ith_year_end = '2022'
+){
+  # Setup ----
+  # set up some state variables so that the simulation is run only if the needed inputs are available.
+  met_data_ready     <- FALSE # Met downloaded?
+  met_lines_match    <- FALSE # Exactly one line in the apsimx file to update?
+  
+  # get weather and soil data
+  try(
+    run_apsimx_for_gps(
+      lon = ith_lon,
+      lat = ith_lat,
+      year_start = ith_year_start,
+      year_end = ith_year_end,
+      met_dir = paste0(cache_path, 'power/'),
+      ssurgo_dir = paste0(cache_path, 'ssurgo/'),
+      planting_date = '1-Apr',
+      cultivar = 'A_80',
+      base_file = "SimulateBasic_-90_34.apsimx",
+      src.dir = cache_path,
+      only_dl_data = TRUE
+    )
+  )
+  
+  # Work with Soil Data ----
+  # From lon/lat get the closest soil
+  # make a temp.apsimx with the desired soil
+  # basic version
+  soils_i <- closest_soils_list_entry(ith_lon = ith_lon, ith_lat = ith_lon)
+  soils_list_i <- as.character(soils_df[soils_i, 'soils_list_i'])
+  
+  replace_soil_in_json(
+    input_json_file = jsonlite::read_json(paste0(cache_path, factorial_file)),
+    replacement_soil = soils_list[[soils_i]],
+    input_file_type = input_file_type,
+    output_dir = cache_path
+  )  
+  
+  # Work with Weather Data ----
+  ith_met_path <- paste0(cache_path, 
+                         'power/', 
+                         paste0(as.character(ith_lon),'_', 
+                                as.character(ith_lat),'_', 
+                                as.character(ith_year_start),'-', 
+                                as.character('01-01'),'_', 
+                                as.character(ith_year_end),'-', 
+                                as.character('12-31'),
+                                '.met'))
+  
+  met_data_ready <- file.exists(ith_met_path)
+  if(met_data_ready){
+    
+    factorial_file_text <- read_file(paste0(cache_path, 'temp.apsimx'))
+    factorial_file_text <- unlist(str_split(factorial_file_text, '\\n'))
+    
+    ith_met_path <- str_split(ith_met_path, pattern = '/')[[1]]
+    replace_met <- ith_met_path[length(ith_met_path)]
+    
+    # Now I'll pull out the met file name instead of passing it in.
+    ith_expect_met <- factorial_file_text[str_detect(
+      string = factorial_file_text, '"FileName":.+\\.met')]
+    ith_expect_met <- str_extract(ith_expect_met, '[\\w-.]+\\.met')
+    
+    mask <- str_detect(string = factorial_file_text, ith_expect_met)
+    relevant_line <- factorial_file_text[mask]
+    
+    met_lines_match <- (length(relevant_line) == 1)
+    if(met_lines_match){
+      replacement_line <- str_replace(relevant_line, pattern = ith_expect_met, replacement = replace_met)
+      factorial_file_text[mask] <- replacement_line
+      factorial_file_text <- paste(factorial_file_text, collapse = '\n')
+      write_file(factorial_file_text, 
+                 paste0(cache_path, 'temp.apsimx'))  
+    }
+  }
+  
+  # If the tests pass, then run the file ----
+  if((met_data_ready & 
+      met_lines_match)){
+    
+    res <- apsimx(
+      file = 'temp.apsimx',
+      src.dir = cache_path,
+      value = "report")
+    
+  }  else {
+    res = data.frame()
+  }
+  # if there was an issue, return an empty df
+  if(nrow(res) == 0){
+    res <- data.frame(
+      CheckpointID = NA, SimulationID = NA, Experiment = NA, FolderName = NA, 
+      SowDate = NA, Genotype = NA, Zone = NA, Clock.Today = NA, 
+      Maize.AboveGround.Wt = NA, Maize.LAI = NA, yield_Kgha = NA, Date = NA
+    )
+  # and also copy the file so that I can audit it and figure out why it did not work.
+    ensure_dir_path_exists(paste0(cache_path, 'apsimx_audits/'))
+    file.copy(paste0(cache_path, 'temp.apsimx'),
+              paste0(cache_path, 'apsimx_audits/',  paste(c(ith_lon, ith_lat, ith_year_start, ith_year_end, soils_list_i, 'temp.apsimx'), collapse = '__' )))
+  }
+  
+  # delete the temp files
+  if('temp.apsimx' %in% list.files(cache_path)){
+  unlink(paste0(cache_path, 'temp.apsimx'))    
+  }
+  if('temp.db' %in% list.files(cache_path)){
+  unlink(paste0(cache_path, 'temp.db'))    
+  }
+  
+  return(cbind(data.frame(ith_lon, ith_lat, ith_year_start, ith_year_end, soils_list_i, factorial_file), res))
+}
 ```
 
+
 ```{r}
-# test on basic
-# res <- apsimx(
-#     file = 'SimulateBasic_-90_34.apsimx',
-#     src.dir = '../data/soil_bespoke/',
-#     value = "all")
+# Demos
+# modify_and_run_apsimx_temp(
+#     ith_lon = -86.52960,
+#     ith_lat = 34.72952,
+#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#     factorial_file = 'SimulateBasic_-90_34.apsimx',  
+#     input_file_type = 'basic',
+#     ith_year_start = '1984',
+#     ith_year_end = '2022'
+# )
 # 
-# res$Report
-
-
-# and on factorial
-res <- apsimx(
-    file = 'SimulateFactorial_Tiny.apsimx',
-    src.dir = '../data/soil_bespoke/',
-    value = "all")
-
-res$Report
-
-
-res2 <- apsimx(
-    file = 'temp.apsimx',
-    src.dir = '../data/soil_bespoke/',
-    value = "all")
-
-res2$Report |> head()
-
-plot(
-res$Report[, 'yield_Kgha'], 
-res2$Report[, 'yield_Kgha'])
+# modify_and_run_apsimx_temp(
+#     ith_lon = -86.52960,
+#     ith_lat = 34.72952,
+#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#     factorial_file = 'SimulateFactorial_Tiny.apsimx',  
+#     input_file_type = 'factorial', 
+#     ith_year_start = '1984',
+#     ith_year_end = '2022'
+# )
 ```
-
 
 
 
