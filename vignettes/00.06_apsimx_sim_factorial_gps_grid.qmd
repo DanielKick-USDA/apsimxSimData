@@ -60,6 +60,69 @@ paste(unique(planting_dates$planting_date), collapse = ', ' )
 ```
 
 
+
+
+## Parse Soils.apsimx
+```{r}
+# Find all the soil models in the apsimx file that are in 
+temp <- jsonlite::read_json("../inst/extdata/Soils.apsimx")
+
+soils_list <- list()
+
+state_n <- length(temp$Children[[2]]$Children)
+for(state_i in seq(1, state_n)){
+  state_entry <- temp$Children[[2]]$Children[[state_i]]
+  counties_n  <- length(state_entry$Children)
+  for(county_i in seq(1, counties_n)){
+    county_entry <- state_entry$Children[[county_i]]
+    entries_n    <- length(county_entry$Children)
+    for(entry_i in seq(1, entries_n)){
+      # Confirm the node we're at is a soil entry
+      if('Models.Soils.Soil, Models' == county_entry$Children[[entry_i]]$`$type`){
+        # print(c(state_i, county_i, entry_i))
+        soils_list[length(soils_list)+1] <- list(county_entry$Children[[entry_i]])
+      }      
+    }
+  }
+}
+```
+
+# Make a lookup df with metadata and constrain to contiguous US
+```{r}
+soils_df <- do.call(rbind, 
+                    purrr::map(soils_list, function(e){
+                      data.frame(
+                        State = e$State,
+                        Region = e$Region,
+                        Longitude = e$Longitude,
+                        Latitude = e$Latitude,
+                        SoilType = e$SoilType,
+                        ApsoilNumber = e$ApsoilNumber,
+                        Comments = e$Comments,
+                        Name = e$Name
+                        )  
+                    })) 
+
+soils_df['soils_list_i'] <- seq(1, nrow(soils_df))
+
+# Constrain to contiguous us
+soils_df <- soils_df |> filter(!(State %in% c('Alaska', 'Hawaii')))
+
+soils_df[((soils_df$Longitude == 0) &
+          (soils_df$Latitude == 0)), c('Longitude', 'Latitude')] <- NA
+
+soils_df |> 
+  mutate(MissingGPS = case_when(is.na(Longitude) ~ 'NoGPS',
+                                !is.na(Longitude) ~ 'GPS')) |>
+  mutate(Longitude = case_when(is.na(Longitude) ~ 0, !is.na(Longitude) ~ Longitude), 
+         Latitude = case_when(is.na(Latitude) ~ 0, !is.na(Latitude) ~ Latitude)) |>
+  ggplot(aes(Longitude, Latitude))+
+  geom_point()+
+  facet_wrap(~MissingGPS, scales='free' )+
+  labs(title = 'Note that some regional soils have no lon/lat')
+```
+
+
 ## Small scale test
 Using the factorial experiment file `SimulateFactorial_Tiny.apsimx` which contains only two cultivars, confirm that that I can change the necessary soil and weather inputs. 
 
@@ -95,6 +158,156 @@ run_apsimx_for_gps(
 ```
 
 
+```{r get dist relative to valid soils}
+library(geodist)
+# take in a lon/lat find closest entry. Will not be useful for the entries at 0,0
+calc_dist_vs_soil_df <- function(
+    ith_lon,
+    ith_lat
+    ){
+  dists <- geodist(
+    rbind(data.frame(
+      Longitude = ith_lon,
+      Latitude = ith_lat),
+      soils_df[, c('Longitude', 'Latitude')]), 
+          measure = "geodesic")
+  # in meters
+  return(dists[1, 2:ncol(dists)])
+}
+```
+
+
+```{r}
+# Unfortunately there are not matching "Name" entries nor are comments setup in similar ways. Due to this I'm going to use distance to set up the pairings. Because I can't match entries by these varaibles I'm usign location which 
+closest_soils_list_entry <- function(ith_lon,
+                                     ith_lat){
+  
+  metadata <- data.frame(Longitude = ith_lon,
+                         Latitude = ith_lat)
+  # look at distance
+  soils_df['temp_dist'] <- calc_dist_vs_soil_df(
+    ith_lon = metadata[1, 'Longitude'],
+    ith_lat = metadata[1, 'Latitude']
+  )
+  return(soils_df[which.min(soils_df$temp_dist), 'soils_list_i'])
+}
+```
+
+
+```{r}
+# given a json file (so it need not be read in over and over again), and desired soil, write out with the desired soil 
+replace_soil_in_json <- function(
+  input_json_file = jsonlite::read_json(paste0(cache_path, 'SimulateFactorial_Tiny.apsimx')),
+  replacement_soil = soils_list[[1]],
+  input_file_type = 'basic', # 'factorial'
+  output_dir = cache_path
+  ){
+  if(input_file_type == 'basic'){
+    # replacement should be of type "Models.Soils.Soil, Models"
+    if(input_json_file$Children[[2]]$Children[[5]]$Children[[2]]$`$type` != "Models.Soils.Soil, Models"){
+      print('Input not of basic apsimx format. Has the soils module been moved?')
+    } else {
+      input_json_file$Children[[2]]$Children[[5]]$Children[[2]] <- replacement_soil
+    }
+  }
+  
+  if(input_file_type == 'factorial'){
+    # replacement should be of type "Models.Soils.Soil, Models"
+    if(input_json_file$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$`$type` != "Models.Soils.Soil, Models"){
+      print('Input not of basic apsimx format. Has the soils module been moved?')
+    } else {
+      input_json_file$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]] <- replacement_soil
+    }
+  }
+  
+  jsonlite::write_json(input_json_file, 
+                       paste0(output_dir, 'temp.apsimx'), 
+                       pretty = TRUE, 
+                       digits = NA, auto_unbox = TRUE, null = "null", 
+                       na = "null")
+}
+```
+
+```{r}
+ith_lon = -86.52960
+ith_lat = 34.72952
+
+
+# From lon/lat get the closest soil
+
+soils_i <- closest_soils_list_entry(ith_lon = ith_lon,
+                         ith_lat = ith_lon)
+# soils_df[soils_i, ]
+soils_list[[soils_i]]
+
+
+
+# make a temp.apsimx with the desired soil
+# basic version
+replace_soil_in_json(
+  input_json_file = jsonlite::read_json(paste0(cache_path, 'SimulateBasic_-90_34.apsimx')),
+  replacement_soil = soils_list[[1]],
+  input_file_type = 'basic', # 'factorial'
+  output_dir = cache_path
+  )
+
+# # factorial version
+# replace_soil_in_json(
+#   input_json_file = jsonlite::read_json(paste0(cache_path, 'SimulateBasic_-90_34.apsimx')),
+#   replacement_soil = soils_list[[1]],
+#   input_file_type = 'factorial', # 'basic'
+#   output_dir = cache_path
+#   )
+# 
+# unlink(paste0(output_dir, 'temp.apsimx'))
+```
+
+
+
+
+
+
+
+
+```{r}
+res <- apsimx(
+    file = 'SimulateBasic_-90_34.apsimx',
+    src.dir = '../data/soil_bespoke/',
+    value = "all")
+
+res$Report
+```
+
+```{r}
+# test on basic
+# res <- apsimx(
+#     file = 'SimulateBasic_-90_34.apsimx',
+#     src.dir = '../data/soil_bespoke/',
+#     value = "all")
+# 
+# res$Report
+
+
+# and on factorial
+res <- apsimx(
+    file = 'SimulateFactorial_Tiny.apsimx',
+    src.dir = '../data/soil_bespoke/',
+    value = "all")
+
+res$Report
+
+
+res2 <- apsimx(
+    file = 'temp.apsimx',
+    src.dir = '../data/soil_bespoke/',
+    value = "all")
+
+res2$Report |> head()
+
+plot(
+res$Report[, 'yield_Kgha'], 
+res2$Report[, 'yield_Kgha'])
+```
 
 
 
