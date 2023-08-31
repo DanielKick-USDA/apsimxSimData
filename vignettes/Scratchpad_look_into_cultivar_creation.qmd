@@ -1,0 +1,142 @@
+---
+title: "Untitled"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+# Extract example cultivars
+M <- jsonlite::read_json("~/GitHub/apsimxSimData/inst/extdata/MaizeGEM.apsimx")
+
+cultivar_folder <- M$Children[[2]]$Children[[1]]$Children[[20]]$Children
+
+res_list <- map(1:32, # 33 is a folder and 34 is a custom entry from the workshop
+function(i){
+  if(cultivar_folder[[i]]$`$type` != 'Models.PMF.Cultivar, Models'){
+    return(NA)
+  }else{
+    return(list(
+      'Key' = as.character(cultivar_folder[[i]]$Name),
+     'Values' = unlist(cultivar_folder[[i]]$Command)))
+  }
+  
+})
+
+# repeat for generics
+res_list2 <- map(1:27, 
+function(i){
+  if(cultivar_folder[[33]]$Children[[i]]$`$type` != 'Models.PMF.Cultivar, Models'){
+    return(NA)
+  }else{
+    return(list(
+      'Key' = as.character(cultivar_folder[[33]]$Children[[i]]$Name),
+     'Values' = unlist(cultivar_folder[[33]]$Children[[i]]$Command)))
+  }
+  
+})
+
+
+res_list <- c(res_list, res_list2) 
+
+temp <- map(seq_along(res_list), function(ii){
+  ee <- res_list[[ii]]
+  out <- data.frame(join_on = TRUE)
+  for(i in seq_along(ee$Values)){
+    # print(paste(rep('#', 80), collapse = ''))
+    # print(ii)
+    # print(i)
+    e <- ee$Values[[i]]
+    e <- str_replace_all(e, ' ', '') %>% str_split( '=') %>% unlist()
+    # Pioneer_3153 seems to include no values
+    if(length(e) == 1){
+      e[2] <- ""
+    }
+    # if there are multiple entries, unpack them
+    if( str_detect(e[2], ',')){
+      xx <- data.frame(unlist(str_split(e[2], ','))) 
+      vals <- unlist(str_split(e[2], ','))
+      xx <- do.call(cbind, map(seq_along(vals), function(j){
+              xx <- data.frame(vals[j])
+              names(xx) <- paste(e[1], '__', as.character(j), sep = '')
+              return(xx)
+      }))
+    }else{
+      xx <- data.frame(e[2]) 
+          names(xx) <- e[1]
+    } 
+
+    xx['join_on'] <- TRUE
+    out <- full_join(out, xx, relationship = 'many-to-many')
+  }
+  out['Key'] <- ee$Key
+  return(out)
+})
+
+out <- temp[[1]]
+for( i in seq(2, length(temp))){
+  out <- full_join(out, temp[[i]])
+}
+# there's a column without a name. Probably a blank line in the command file.
+names(out) <- unlist(map(names(out), 
+                         function(e){if(e == ''){return('blank')}else{return(e)}
+                           }))
+out <- out %>% select(-join_on, -blank) %>% as_tibble()
+param_cols <- names(out)[names(out) != 'Key']
+out <- out[, c('Key', param_cols)]
+
+# contains no modifications
+out <- out %>% filter(Key != 'Pioneer_3153')
+
+skimr::skim(out)
+
+param_import <- data.frame(
+  param = param_cols,
+  pr = unlist(map(param_cols, function(param_col){mean(!is.na(out[param_col]))}))
+  ) %>% arrange(desc(pr))
+
+param_import %>% 
+  ggplot(aes(x = pr))+ geom_histogram()
+
+# param_import %>% filter(pr >= .75)
+
+
+# param_import %>% filter(pr <= .75) %>% filter(pr >= .25)
+# 
+# 
+# param_col <- param_cols[1]
+# is_required <- mean(is.na(out[param_col])) == 0
+# 
+# 
+# out %>% 
+#   pivot_longer(cols = param_cols) %>% 
+#   mutate(value = as.numeric(value)) %>% 
+#   ggplot(aes(value, name))+
+#   geom_point()
+# 
+# out[param_col]
+# 
+# write.csv(out, "~/../Downloads/temp.csv")
+```
+
+
+```{r}
+# M <- jsonlite::read_json('./data/00.06_apsimx_sim_factorial_gps_grid/SimulateFactorialDaily_-90_34.apsimx')
+# 
+# 
+# M$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[5]] %>% str(max.level = 2)
+
+# This is where I would change cultivar used.
+# The ohter entries are not stored here
+# M$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[6]]$Parameters[[3]]$Value
+
+# %>% str(max.level = 2)
+
+
+
+# Pioneer_3153
+```
+
