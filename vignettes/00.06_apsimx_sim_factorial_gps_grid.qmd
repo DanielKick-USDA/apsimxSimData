@@ -10,14 +10,16 @@ This file is basically a repeat of 00.04 but uses what I learned from that file 
 library(tidyverse)
 library(apsimx)
 
-apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
-apsimx_options(examples.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\Examples')
-
+if (!str_detect(osVersion, 'Ubuntu')){
+  apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
+  apsimx_options(examples.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\Examples')
+}
 
 require(soilDB)
 require(sp)
 require(sf)
 require(spData)
+require(DBI)
 
 devtools::load_all()
 if (!str_detect(getwd(), '/vignettes$')){setwd(paste0(getwd(), '/vignettes'))}
@@ -33,6 +35,7 @@ ensure_dir_path_exists(dir_path = cache_path)
 Many cultivars
 ```{r cultivars tested}
 # [Field].Sow on a fixed date.Script.CultivarName = A_80, A_90, A_95, A_100, A_103, A_105, A_108, A_110, A_112, A_115, A_120, A_130, Atrium, B_80, B_90, B_95, B_100, B_103, B_105, B_108, B_110, B_112, B_115, B_120, B_130, CG4141, GH_5009, GH_5019WX, HY_110, Hycorn_40, Hycorn_53, Katumani, Laila, LY_110, Makueni, malawi_local, Melkassa, mh12, mh16, mh17, mh18, mh19, NSCM_41, P1197, Pioneer_3153, Pioneer_33M54, Pioneer_34K77, Pioneer_38H20, Pioneer_39G12, Pioneer_39V43, r201, r215, sc401, sc501, sc601, sc623, sc625, sr52
+
 ```
 
 Varying planting days
@@ -87,6 +90,9 @@ for(state_i in seq(1, state_n)){
 }
 ```
 
+
+
+
 # Make a lookup df with metadata and constrain to contiguous US
 ```{r}
 soils_df <- do.call(rbind, 
@@ -108,8 +114,8 @@ soils_df['soils_list_i'] <- seq(1, nrow(soils_df))
 # Constrain to contiguous us
 soils_df <- soils_df |> filter(!(State %in% c('Alaska', 'Hawaii')))
 
-soils_df[((soils_df$Longitude == 0) &
-          (soils_df$Latitude == 0)), c('Longitude', 'Latitude')] <- NA
+soils_df[((soils_df$Longitude == 0) | (is.na(soils_df$Longitude)) &
+           ((soils_df$Latitude == 0) | (is.na(soils_df$Latitude)))), c('Longitude', 'Latitude')] <- NA
 
 soils_df |> 
   mutate(MissingGPS = case_when(is.na(Longitude) ~ 'NoGPS',
@@ -123,38 +129,48 @@ soils_df |>
 ```
 
 
+
+```{r}
+# these soils are failing to run. I'm not removing them so that the ordering stays consistent with the files I've already run but I will prevent them from matching with any queries by setting there lon/lat to NA
+
+# I found these by stepping through all soils in the soil_list and trying to run a basic model.
+mask <- soils_df$soils_list_i %in% c(139, 150, 159, 170, 174, 184, 186, 235, 250, 252, 258, 263, 268, 283, 285, 320)
+soils_df[mask, c('Longitude', 'Latitude')] <- NA
+```
+
+
 ## Small scale test
 Using the factorial experiment file `SimulateFactorial_Tiny.apsimx` which contains only two cultivars, confirm that that I can change the necessary soil and weather inputs. 
 
 ```{r}
 # get weather and soil data
-cache_path
-
-factorial_file = 'SimulateFactorial_Tiny.apsimx'
-
-ith_lon = -86.52960
-ith_lat = 34.72952
-ith_year_start = '1984'
-ith_year_end = '2022'
-ith_year_end
-ith_planting_date = '1-Apr'
-ith_cultivar = 'A_80'
-ith_base_file = "SimulateBasic_-90_34.apsimx"  
-
-# Download the needed data
-run_apsimx_for_gps(
-    lon = ith_lon,
-    lat = ith_lat,
-    year_start = ith_year_start,
-    year_end = ith_year_end,
-    met_dir = paste0(cache_path, 'power/'),
-    ssurgo_dir = paste0(cache_path, 'ssurgo/'),
-    planting_date = '1-Apr',
-    cultivar = 'A_80',
-    base_file = "SimulateBasic_-90_34.apsimx",
-    src.dir = cache_path,
-    only_dl_data = TRUE
-  )
+# cache_path
+# 
+# factorial_file = 'SimulateFactorial_Tiny.apsimx'
+# 
+# ith_lon = -86.52960
+# ith_lat = 34.72952
+# ith_year_start = '1984'
+# ith_year_end = '2022'
+# ith_year_end
+# ith_planting_date = '1-Apr'
+# ith_cultivar = 'A_80'
+# ith_base_file = "SimulateBasic_-90_34.apsimx"
+# 
+# # Download the needed data
+# run_apsimx_for_gps(
+#     lon = ith_lon,
+#     lat = ith_lat,
+#     year_start = ith_year_start,
+#     year_end = ith_year_end,
+#     met_dir = paste0(cache_path, 'power/'),
+#     ssurgo_dir = paste0(cache_path, 'ssurgo/'),
+#     planting_date = '1-Apr',
+#     cultivar = 'A_80',
+#     base_file = "SimulateBasic_-90_34.apsimx",
+#     src.dir = cache_path,
+#     only_dl_data = TRUE
+#   )
 ```
 
 
@@ -229,18 +245,18 @@ replace_soil_in_json <- function(
 ```
 
 ```{r}
-# Demo
+# # Demo
 # ith_lon = -86.52960
 # ith_lat = 34.72952
-
-# From lon/lat get the closest soil
-
+# 
+# # From lon/lat get the closest soil
+# 
 # soils_i <- closest_soils_list_entry(ith_lon = ith_lon, ith_lat = ith_lon)
 # soils_df[soils_i, ]
 # soils_list[[soils_i]]
-
-# make a temp.apsimx with the desired soil
-# basic version
+# 
+# # make a temp.apsimx with the desired soil
+# # basic version
 # replace_soil_in_json(
 #   input_json_file = jsonlite::read_json(paste0(cache_path, 'SimulateBasic_-90_34.apsimx')),
 #   replacement_soil = soils_list[[1]],
@@ -248,17 +264,17 @@ replace_soil_in_json <- function(
 #   output_dir = cache_path
 #   )
 # 
-# unlink(paste0(output_dir, 'temp.apsimx'))
-
+# unlink(paste0(cache_path, 'temp.apsimx'))
+# 
 # # factorial version
 # replace_soil_in_json(
-#   input_json_file = jsonlite::read_json(paste0(cache_path, 'SimulateBasic_-90_34.apsimx')),
+#   input_json_file = jsonlite::read_json(paste0(cache_path, 'SimulateFactorial_Tiny.apsimx')),
 #   replacement_soil = soils_list[[1]],
 #   input_file_type = 'factorial', # 'basic'
 #   output_dir = cache_path
 #   )
 # 
-# unlink(paste0(output_dir, 'temp.apsimx'))
+# unlink(paste0(cache_path, 'temp.apsimx'))
 ```
 
 
@@ -381,9 +397,9 @@ modify_and_run_apsimx_temp <- function(
 
 
 ```{r}
-# Demos
-# From lon/lat get the closest soil. 
-# This is not included in modify_and_run_apsimx_temp so that the wrapper function below can include it in the expected name.
+# # Demos
+# # From lon/lat get the closest soil.
+# # This is not included in modify_and_run_apsimx_temp so that the wrapper function below can include it in the expected name.
 # soils_i <- closest_soils_list_entry(ith_lon = -86.52960,
 #                                     ith_lat = 34.72952)
 # 
@@ -412,7 +428,37 @@ modify_and_run_apsimx_temp <- function(
 
 
 ```{r}
-wrapper_apsimx_factorial <- function(
+# Test all soils
+
+
+# recheck these:
+# 139 150 159 170 174 184 186 235 250 252 258 263 268 283 285 320
+
+
+# for(i in c(172, 174)){
+#   temp_files = list.files("../data/00.06_apsimx_sim_factorial_gps_grid/")
+#   for(temp_file in temp_files[str_detect(temp_files, 'temp\\..+')])
+#     unlink(paste0("../data/00.06_apsimx_sim_factorial_gps_grid/", temp_file))
+#   
+#   print(i)
+#   modify_and_run_apsimx_temp(
+#     ith_lon = -86.52960,
+#     ith_lat = 34.72952,
+#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#     factorial_file = 'SimulateBasic_-90_34.apsimx',
+#     input_file_type = 'basic',
+#     soils_i = i,
+#     ith_year_start = '1984',
+#     ith_year_end = '2022'
+#   )
+# }
+
+
+```
+
+
+```{r}
+wrapper_apsimx_factorial_temp <- function(
     ith_lon = -86.52960,
     ith_lat = 34.72952,
     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
@@ -421,7 +467,8 @@ wrapper_apsimx_factorial <- function(
     soils_i = 1,
     ith_year_start = '1984',
     ith_year_end = '2022',
-    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/" # This is for the output not the inputs.
+    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+    write_or_return_result = 'write'
 ){
   # Same approach as `run_and_store_apsimx_for_gps` but for a factorial experiment
   ensure_dir_path_exists(cache_path)
@@ -449,55 +496,94 @@ wrapper_apsimx_factorial <- function(
       ith_year_end   = ith_year_end
     )
     
-    write.csv(res, paste0(save_path,save_name))
+    if (write_or_return_result == 'return'){
+      return(res)
+    } else {
+      write.csv(res, paste0(save_path,save_name))
+    }
   }
 }
 ```
 
 
+
+
 ```{r}
-# demo
+# # demo
 # soils_i <- closest_soils_list_entry(ith_lon = -86.52960,
 #                                     ith_lat = 34.72952)
-# wrapper_apsimx_factorial(
+# wrapper_apsimx_factorial_temp(
 #     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
 #     save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
 #     factorial_file = 'SimulateFactorial_Tiny.apsimx',
 #     input_file_type = 'factorial',
+#     soils_i = soils_i,
+#     ith_lon = -86.52960,
+#     ith_lat = 34.72952,
+#     ith_year_start = '1984',
+#     ith_year_end = '2022'
+# )
+```
+
+
+```{r}
+# this takes a while to run.
+# soils_i <- closest_soils_list_entry(ith_lon = -86.52960,
+#                                     ith_lat = 34.72952)
+# wrapper_apsimx_factorial_temp(
+#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#     save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+#     factorial_file = 'SimulateFactorial.apsimx',
+#     input_file_type = 'factorial',
+#     soils_i = soils_i,
 #     ith_lon = -86.52960,
 #     ith_lat = 34.72952,
 #     ith_year_start = '1984',
 #     ith_year_end = '2022'
 # )
 
+# Visualize
+# M <- read.csv('../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/-86.5296__34.72952__1984__2022__1__SimulateFactorial.csv')
+# M <- M %>% as_tibble()
+# 
+# M['Year'] <- str_extract(M$Date, '\\d+')
+# M['DOY'] <- lubridate::ymd(M$Date) - lubridate::ymd(paste0(M$Year, '-01-01'))
+# M['SowDOY'] <- lubridate::dmy(paste0(M$SowDate, M$Year)) - lubridate::ymd(paste0(M$Year, '-01-01'))
+# 
+# M <- M %>% select(Year, DOY, SowDate, SowDOY, Genotype, yield_Kgha)
+# M['SowDOY'] <- as.numeric(M$SowDOY)
+# 
+# 
+# unique(M$Genotype) %>% length()
+# unique(M$Year) %>% length()
+# unique(M$SowDOY) %>% length()
+# 
+# M %>%
+#   filter(Genotype %in% unique(M$Genotype)[1]) %>%
+#   ggplot(aes(x = SowDOY, y = yield_Kgha))+
+#   geom_point(alpha = 0.3)+
+#   geom_smooth(method = lm)+
+#   labs(title = paste0('One Genotype, ',
+#                       as.character(length(unique(M$SowDOY))), ' Sowing DOYs, ',
+#                       as.character(length(unique(M$Year))), ' Years'
+#                       ))
+# 
+# M %>%
+#   ggplot(aes(x = SowDOY, y = yield_Kgha, group = Genotype))+
+#   geom_smooth(method = lm, se = F)+
+#   labs(title = paste0('Showing all ', as.character(length(unique(M$Genotype))), ' Genotypes'))
 ```
 
-
 ```{r}
-# this takes a while to run.
-soils_i <- closest_soils_list_entry(ith_lon = -86.52960,
-                                    ith_lat = 34.72952)
-wrapper_apsimx_factorial(
-    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
-    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
-    factorial_file = 'SimulateFactorial.apsimx',
-    input_file_type = 'factorial',
-    ith_lon = -86.52960,
-    ith_lat = 34.72952,
-    ith_year_start = '1984',
-    ith_year_end = '2022'
-)
-```
-
-```{r}
-# demo with daily yield measurements
+# # demo with daily yield measurements
 # soils_i <- closest_soils_list_entry(ith_lon = -86.52960,
 #                                     ith_lat = 34.72952)
-# wrapper_apsimx_factorial(
+# wrapper_apsimx_factorial_temp(
 #     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
 #     save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
 #     factorial_file = 'SimulateBasicDaily_-90_34.apsimx',
 #     input_file_type = 'basic',
+#     soils_i = soils_i,
 #     ith_lon = -86.52960,
 #     ith_lat = 34.72952,
 #     ith_year_start = '1984',
@@ -505,24 +591,166 @@ wrapper_apsimx_factorial(
 # )
 # 
 # # Visualize
-# M <- read.csv('../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/-86.5296__34.72952__1984__2022__1__SimulateBasicDaily_-90_34.csv')
+# M <- read.csv('../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/-86.5296__34.72952__1984__2022__248__SimulateBasicDaily_-90_34.csv')
 # M <- M %>% as_tibble()
 # 
 # M['Year'] <- str_extract(M$Date, '\\d+')
 # M['DOY'] <- lubridate::ymd(M$Date) - lubridate::ymd(paste0(M$Year, '-01-01'))
 # 
-# M %>% 
-#   filter(yield_Kgha != 0) %>% 
+# M %>%
+#   filter(yield_Kgha != 0) %>%
 #   ggplot(aes(x = DOY, y = yield_Kgha, group = Year))+
 #   geom_line()
 ```
 
+```{r}
+# # demo with daily yield measurements in factorial
+# 
+# soils_i <- closest_soils_list_entry(ith_lon = -86.52960,
+#                                     ith_lat = 34.72952)
+# wrapper_apsimx_factorial_temp(
+#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#     save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+#     factorial_file = 'SimulateFactorialDaily_-90_34.apsimx',
+#     input_file_type = 'factorial',
+#     soils_i = soils_i,
+#     ith_lon = -86.52960,
+#     ith_lat = 34.72952,
+#     ith_year_start = '1984',
+#     ith_year_end = '2022'
+# )
+# 
+# M <- read.csv('../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/-86.5296__34.72952__1984__2022__248__SimulateFactorialDaily_-90_34.csv')
+# M <- M %>% as_tibble()
+# 
+# M['Year'] <- str_extract(M$Date, '\\d+')
+# M['DOY'] <- lubridate::ymd(M$Date) - lubridate::ymd(paste0(M$Year, '-01-01'))
+# 
+# M %>%
+#   filter(yield_Kgha != 0) %>%
+#   ggplot(aes(x = DOY, y = yield_Kgha, group = interaction(Year, SowDate, Genotype)))+
+#   geom_line()
+```
 
 
 
 # run on all g2f locations
 
 ```{r points to use}
+# gps <- read.csv('../inst/extdata/gps_coords.csv')
+# gps <- gps[!stringr::str_detect(gps[, 'Env'], '^ONH.+'), ]
+# gps <- gps[!stringr::str_detect(gps[, 'Env'], '^GEH.+'), ]
+# 
+# gps <- gps %>% 
+#   rename(lat = Latitude_of_Field,
+#          lon = Longitude_of_Field) %>% 
+#   select(lat, lon) %>% 
+#   distinct()
+# gps_g2f <- gps
+```
+
+
+```{r}
+# tic_outer <- Sys.time()
+# tics <- c()
+# for(i in seq(1, nrow(gps))){
+#   temp_files = list.files("../data/00.06_apsimx_sim_factorial_gps_grid/")
+#   for(temp_file in temp_files[str_detect(temp_files, 'temp\\..+')]){
+#     unlink(paste0("../data/00.06_apsimx_sim_factorial_gps_grid/", temp_file))
+#   }
+#   ## all because I don't have tqdm ====
+#   tics[length(tics)+1] <- Sys.time()
+#   if(length(tics)>1){ 
+#     #      # Remaining iter    # Worst case time per iter (and a way to ignore cached results)
+#     secs = (nrow(gps)-(i-1)) * max(tics[2:length(tics)]-tics[1])
+#     minutes = as.character(secs %/% 60)
+#     sec = as.character(round(secs %% 60))
+#     print(paste(rep('-', 80), collapse = ''))
+#     print(paste0(minutes, ':', if(as.numeric(sec)>=9){sec}else{paste0('0', sec)}))
+#     print(paste(rep('-', 80), collapse = ''))
+#   }
+#   soils_i <- closest_soils_list_entry(ith_lon = gps[i, 'lon'],
+#                                       ith_lat = gps[i, 'lat'])
+#   try(
+#   wrapper_apsimx_factorial_temp(
+#       cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#       save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+#       factorial_file = 'SimulateFactorialDaily.apsimx',
+#       input_file_type = 'factorial',
+#       soils_i = soils_i,
+#       ith_lon = gps[i, 'lon'],
+#       ith_lat = gps[i, 'lat'],
+#       ith_year_start = '1984',
+#       ith_year_end = '2022'
+#   )
+#   )
+# }
+# toc_outer <- Sys.time()
+# print(toc_outer-tic_outer)
+```
+
+## Repeat for grid over usa
+### Load GPS Data
+```{r}
+if(file.exists(paste0(cache_path, 'gps_grid_soil_match.csv'))){
+  gps <- read.csv(paste0(cache_path, 'gps_grid_soil_match.csv'))  
+}else{
+  gps <- read.csv('../data/00.01_setup_USA_env_gps_grid/gps_grid.csv') %>% rename(Latitude = lat, Longitude = lon)
+  
+  gps['MinKm'] <- -1
+  gps['soil_i_or_is'] <- -1
+  
+  # Would be faster to compute vornoi regions and then check which a coordinate pair fell in but this is fast enough.
+  for(i in seq(1, nrow(gps))){
+    soil_temp <- soils_df[, c("Longitude", "Latitude")]
+    soil_temp[is.na(soil_temp$Longitude), "Longitude"] <- 0
+    soil_temp[is.na(soil_temp$Latitude), "Latitude"] <- 0
+    
+    dists <- geodist(
+      rbind(gps[i, c("Longitude", "Latitude")],
+            soil_temp[, c("Longitude", "Latitude")]), 
+      measure = 'geodesic'
+    )
+    min_dist <- min(dists[1, 2:ncol(dists)], na.rm = TRUE)
+    min_i_or_is <- c(1:(ncol(dists)-1))[dists[1, 2:ncol(dists)] == min_dist]
+    min_i_or_is <- paste(as.character(min_i_or_is), collapse = '-')
+    
+    gps[i, 'MinKm'] <- min_dist/1000
+    gps[i, 'soil_i_or_is'] <- min_i_or_is
+  }
+  write.csv(gps, paste0(cache_path, 'gps_grid_soil_match.csv'))
+}
+
+gps %>% 
+  ggplot(aes(x = Longitude, y = Latitude, color = MinKm))+
+  geom_point()
+
+gps %>% 
+  ggplot(aes(x = MinKm))+
+  geom_density()
+
+gps %>% 
+  ggplot(aes(x = Longitude, y = Latitude, color = MinKm<100))+
+  geom_point()
+
+gps %>% 
+  ggplot(aes(x = Longitude, y = Latitude, color = soil_i_or_is))+
+  geom_point()+
+  theme(legend.position = '')
+
+
+
+gps %>% filter(MinKm<25) %>% 
+  ggplot(aes(x = Longitude, y = Latitude, color = soil_i_or_is))+
+  geom_point()+
+  theme(legend.position = '')
+
+gps <- gps %>% filter(MinKm<25)
+gps_grid <- gps
+```
+
+```{r}
+# get gps coordinates from g2f and merge into grid
 gps <- read.csv('../inst/extdata/gps_coords.csv')
 gps <- gps[!stringr::str_detect(gps[, 'Env'], '^ONH.+'), ]
 gps <- gps[!stringr::str_detect(gps[, 'Env'], '^GEH.+'), ]
@@ -533,357 +761,87 @@ gps <- gps %>%
   select(lat, lon) %>% 
   distinct()
 
-```
-
-
-```{r}
-tic_outer <- Sys.time()
-tics <- c()
+# so that this can be merged with the below I'm adding in `soil_i_or_is` here.
+gps['soil_i_or_is'] <- -1
 for(i in seq(1, nrow(gps))){
-  ## all because I don't have tqdm ====
-  tics[length(tics)+1] <- Sys.time()
-  if(length(tics)>1){ 
-    #      # Remaining iter    # Worst case time per iter (and a way to ignore cached results)
-    secs = (nrow(gps)-(i-1)) * max(tics[2:length(tics)]-tics[1])
-    minutes = as.character(secs %/% 60)
-    sec = as.character(round(secs %% 60))
-    print(paste(rep('-', 80), collapse = ''))
-    print(paste0(minutes, ':', if(as.numeric(sec)>=9){sec}else{paste0('0', sec)}))
-    print(paste(rep('-', 80), collapse = ''))
-    }
-  wrapper_apsimx_factorial(
-      ith_lon = gps[i, 'lon'],
-      ith_lat = gps[i, 'lat'],
-      save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
-      # factorial_file = 'SimulateFactorial_Tiny.apsimx', # 'SimulateFactorial.apsimx', 
-      factorial_file = 'SimulateFactorial.apsimx', 
-      ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
-      cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
-      ith_year_start = '1984',
-      ith_year_end = '2022',
-      ith_base_file = "SimulateBasic_-90_34.apsimx"
-  )  
+  gps[i, 'soil_i_or_is'] <- closest_soils_list_entry(ith_lon = gps[i, 'lon'],
+                                                     ith_lat = gps[i, 'lat'])  
 }
-toc_outer <- Sys.time()
-print(toc_outer-tic_outer)
-```
-
-Check if all g2f sites worked
-```{r}
-
-gps %>% head()
-
-temp <- list.files("../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/")
-
-gps_counts <- do.call(rbind, map(1:nrow(gps), function(i){
-  mask <- str_detect(temp, paste0(gps[i, 'lon'], '__', gps[i, 'lat']))
-  nvals <- nrow(read.csv(paste0("../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", temp[mask])))
-  return(data.frame(lon = gps[i, 'lon'], lat = gps[i, 'lat'], nvals = nvals))
-}))
 
 
-gps_counts %>% 
-  mutate(Pass = nvals > 1) %>% 
-  ggplot(aes(lon, lat, color = Pass))+
-  geom_point()
+gps <- gps %>% 
+  rename(Longitude = lon,
+         Latitude = lat) %>% 
+  mutate(soil_i_or_is = as.character(soil_i_or_is))
 
-
-filter(gps_counts, nvals == 1)
-
+gps <- full_join(gps, gps_grid)
 ```
 
 
-```{r}
-wrapper_apsimx_factorial(
-      ith_lon = -89.55635,
-      ith_lat =  44.11905,
-      save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
-      # factorial_file = 'SimulateFactorial_Tiny.apsimx', # 'SimulateFactorial.apsimx', 
-      factorial_file = 'SimulateFactorial.apsimx', 
-      ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
-      cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
-      ith_year_start = '1984',
-      ith_year_end = '2022',
-      ith_base_file = "SimulateBasic_-90_34.apsimx"
-  )
-
-
-# function(
-#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
-#     save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
-#     factorial_file = 'SimulateFactorial_Tiny.apsimx',
-#     # this should be fixed. If I change the base apsimx file then it should change
-#     ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
-#     ith_lon = -86.52960,
-#     ith_lat = 34.72952,
-#     ith_year_start = '1984',
-#     ith_year_end = '2022',
-#     ith_base_file = "SimulateBasic_-90_34.apsimx"   
-# ){
-  # Same approach as `run_and_store_apsimx_for_gps` but for a factorial experiment
-  ensure_dir_path_exists(cache_path)
-  ensure_dir_path_exists(save_path)
-  
-  save_name <- paste0(c(as.character(ith_lon), 
-                        as.character(ith_lat), 
-                        as.character(ith_year_start), 
-                        as.character(ith_year_end),
-                        str_replace(factorial_file, '\\.apsimx$', '')
-  ), collapse = '__')
-  save_name <- paste0(save_name, '.csv')
-
-  print(save_name)
-  if(!file.exists(paste0(save_path,save_name))){
-    res = modify_and_run_apsimx_factorial(
-      cache_path = cache_path,
-      factorial_file = factorial_file,
-      ith_expect_met = ith_expect_met,
-      ith_lon = ith_lon,
-      ith_lat = ith_lat,
-      ith_year_start = ith_year_start,
-      ith_year_end = ith_year_end,
-      ith_base_file = ith_base_file
-      )
-
-    write.csv(res, paste0(save_path,save_name))
-  }
-# }
-```
-
 
 ```{r}
-
-# I'm pausing this avenue. The issue is that the soil data needs to be edited before it can run. This appears to be a _very_ common problem. Here are some options:
-# 1. Validate soil/weather before use. 
-# 1.a. Test each separately and then mix and match soil/weather to get hypothetical yields in non-existant combiantions
-# 2. Edit soil on the fly
-# 2.a. This is the approach I have been trying. The SW parameter in the soil table is not editable directly. If I try editing the air-dry then apsimx fails with an error I havent' figured out. 
-
-
-
-# # fails
-# modify_and_run_apsimx_factorial(
-#     ith_lon = -96.42790,
-#     ith_lat = 30.53826,
-#     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
-#     factorial_file = 'SimulateFactorial_Tiny.apsimx',
-#     # this should be fixed. If I change the base apsimx file then it should change
-#     ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
-#     ith_year_start = '1984',
-#     ith_year_end = '2022',
-#     ith_base_file = "SimulateBasic_-90_34.apsimx"
-# )
-
-
-# # inspect file and see if I can find the negative values. 
-# 
-# '../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/'
-# 
-# 
-# temp <- jsonlite::read_json('../data/00.06_apsimx_sim_factorial_gps_grid/apsimx_audits/-96.4279__30.53826__1984__2022__SimulateFactorial_Tiny_temp_soil.apsimx')
-# 
-# 
-# 
-# temp %>% str(max.level = 2)
-# 
-# temp$Children[[2]]$Children %>% str(max.level = 2)
-# 
-# 
-# temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]] %>% str(max.level = 2)
-# 
-# soil_module <- temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]] 
-# soil_module %>% str(max.level = 2)
-# 
-# 
-# ## ----
-# # might be air-dry value?
-# 
-# # this looks like LL15
-# soil_module$Children[[1]]$Children[[3]]$LL
-# 
-# 
-# soil_module$Children[[1]]$Children[[3]]
-# 
-# # list of 10 -- one for each layer?
-# soil_module$Children[[2]] %>% str(max.level = 2)
-# 
-# 
-# walk(c(
-#   1, 
-#   2, 
-#   3, 
-#   4, 
-#   5, 
-#   6, 
-#   7, 
-#   8, 
-#   9, 
-#   # 10
-# ), function(i){
-#   print(paste0(i, paste(rep('-', times = 78), collapse = '')))
-#   print(
-#   soil_module$Children[[i]] %>% str(max.level = 2)
-# )})
-# 
-# # 1 and maybe 6?
-# 
-# 
-# 
-# 
-# soil_module$Children[[1]]$AirDry 
-# soil_module$Children[[6]]$InitialValues 
-# 
-# 
-# # check if soil water in layer is below air-dry value
-# soil_layers <- min(length(
-#   temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[1]]$AirDry 
-# ),
-# length(temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[6]]$InitialValues))
-# 
-# # ith_layer = 1
-# for(ith_layer in seq(1, soil_layers)){
-#   print(ith_layer)
-#   # if soild water is below air-dry, overwrite with air-dry
-#   if( temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[6]]$InitialValues[[ith_layer]] <
-#       temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[1]]$AirDry[[ith_layer]] ){
-#     
-#     temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[6]]$InitialValues[[ith_layer]] <- temp$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$Children[[1]]$AirDry[[ith_layer]]
-#     
+# similar to above, but this one uses precomputed soil i (or is)
+# tic_outer <- Sys.time()
+# tics <- c()
+# for(i in seq(1, nrow(gps))){
+#   temp_files = list.files("../data/00.06_apsimx_sim_factorial_gps_grid/")
+#   for(temp_file in temp_files[str_detect(temp_files, 'temp\\..+')]){
+#     unlink(paste0("../data/00.06_apsimx_sim_factorial_gps_grid/", temp_file))
+#   }
+#   ## all because I don't have tqdm ====
+#   tics[length(tics)+1] <- Sys.time()
+#   if(length(tics)>1){ 
+#     #      # Remaining iter    # Worst case time per iter (and a way to ignore cached results)
+#     secs = (nrow(gps)-(i-1)) * max(tics[2:length(tics)]-tics[1])
+#     minutes = as.character(secs %/% 60)
+#     sec = as.character(round(secs %% 60))
+#     print(paste(rep('-', 80), collapse = ''))
+#     print(paste0(minutes, ':', if(as.numeric(sec)>=9){sec}else{paste0('0', sec)}))
+#     print(paste(rep('-', 80), collapse = ''))
+#   }
+#   # soils_i <- closest_soils_list_entry(ith_lon = gps[i, 'lon'],
+#   #                                     ith_lat = gps[i, 'lat'])
+#   
+#   soil_i_or_is <- gps[i, 'soil_i_or_is']
+#   for(soils_i in unlist(str_split(soil_i_or_is, '-'))){
+#     soils_i <- as.numeric(soils_i)
+#     try(
+#     wrapper_apsimx_factorial_temp(
+#       cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+#       save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+#       factorial_file = 'SimulateFactorialDaily.apsimx',
+#       input_file_type = 'factorial',
+#       soils_i = soils_i,
+#       ith_lon = gps[i, 'Longitude'],
+#       ith_lat = gps[i, 'Latitude'],
+#       ith_year_start = '1984',
+#       ith_year_end = '2022'
+#     ) 
+#     )
 #   }
 # }
-# 
-# 
-# 
-# jsonlite::write_json(temp, 
-#                      "../data/00.06_apsimx_sim_factorial_gps_grid/apsimx_audits/test_changes.apsimx", 
-#                      pretty = TRUE, 
-#                      digits = NA, auto_unbox = TRUE, null = "null", 
-#                      na = "null")
+# toc_outer <- Sys.time()
+# print(toc_outer-tic_outer)
 ```
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-## Repeat for grid over usa
-### Load GPS Data
-Which contained data that I could cache?
-Note, these cached data are not what I will be using for the models due to an error with pre 1984 data
 ```{r}
-load_path <- '../data/00.02_download_env_db_entries/gps_grid/'
-
-gps_grid_files <- rbind(
-  data.frame(type = 'ssurgo', file = list.files(paste0(load_path, '/apsimx_ssurgo'))),
-  data.frame(type = 'daymet', file = list.files(paste0(load_path, '/apsimx_daymet'))),
-  data.frame(type = 'power', file = list.files(paste0(load_path, '/apsimx_power')))
-  )
-  
-gps_grid_files <- gps_grid_files %>% 
-  mutate(gps = case_when(
-    type == 'ssurgo' ~ str_replace(file, pattern = '\\.RDS', replacement = ''),
-    type == 'daymet' ~ str_replace(file, pattern = '_\\d+_\\d+\\.met$', replacement = ''),
-    type == 'power' ~ str_replace(file,  pattern = '_\\d+-\\d+-\\d+\\_\\d+-\\d+-\\d+\\.met$', replacement = '')
-  )) 
-
-gps_grid_files <- gps_grid_files %>% 
-  pivot_wider(names_from = type, values_from = file)
-
-gps_grid_files <- gps_grid_files %>% 
-  tidyr::separate(gps, c('lon', 'lat'), sep = '_') %>% 
-  mutate(lon = as.numeric(lon), lat = as.numeric(lat))
-
-
-# removing ssurgo is not a sure fire solution. 
-gps_grid_files %>%
-  mutate(ssurgo = !is.na(ssurgo),
-         daymet = !is.na(daymet),
-         power = !is.na(power)) %>% 
-  group_by(ssurgo, daymet, power) %>% 
-  tally()
-
-gps_grid_files %>% 
-  ggplot(aes(x = lon, y = lat))+
-  geom_point(color = 'red')+
-  geom_point(data = gps_grid_files[complete.cases(gps_grid_files), ], color = 'black')
-
+saveRDS(soils_list, file = paste0(cache_path, 'soils_df'))
+write.csv(soils_df, file = paste0(cache_path, 'soils_df'))
 ```
 
 
 ```{r}
-gps <- read.csv('../data/00.01_setup_USA_env_gps_grid/gps_grid.csv')
-
-# no seed needed here. This is just to make sure that the sampling order is random.
-gps[['order']] <- sample(1:nrow(gps))
-gps <- gps %>% arrange(order)
-
-```
-
-
-```{r}
+# similar to above, but this one uses precomputed soil i (or is)
 tic_outer <- Sys.time()
 tics <- c()
 for(i in seq(1, nrow(gps))){
+  temp_files = list.files("../data/00.06_apsimx_sim_factorial_gps_grid/")
+  for(temp_file in temp_files[str_detect(temp_files, 'temp\\..+')]){
+    unlink(paste0("../data/00.06_apsimx_sim_factorial_gps_grid/", temp_file))
+  }
   ## all because I don't have tqdm ====
   tics[length(tics)+1] <- Sys.time()
-  if(length(tics)>1){ 
+  if(length(tics)>1){
     #      # Remaining iter    # Worst case time per iter (and a way to ignore cached results)
     secs = (nrow(gps)-(i-1)) * max(tics[2:length(tics)]-tics[1])
     minutes = as.character(secs %/% 60)
@@ -891,19 +849,142 @@ for(i in seq(1, nrow(gps))){
     print(paste(rep('-', 80), collapse = ''))
     print(paste0(minutes, ':', if(as.numeric(sec)>=9){sec}else{paste0('0', sec)}))
     print(paste(rep('-', 80), collapse = ''))
+  }
+  # soils_i <- closest_soils_list_entry(ith_lon = gps[i, 'lon'],
+  #                                     ith_lat = gps[i, 'lat'])
+  
+  soil_i_or_is <- gps[i, 'soil_i_or_is']
+  for(soils_i in unlist(str_split(soil_i_or_is, '-'))){
+    soils_i <- as.numeric(soils_i)
+    
+    # try(
+    #   wrapper_apsimx_factorial_temp(
+    #     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    #     save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+    #     factorial_file = 'SimulateFactorialDaily.apsimx',
+    #     input_file_type = 'factorial',
+    #     soils_i = soils_i,
+    #     ith_lon = gps[i, 'Longitude'],
+    #     ith_lat = gps[i, 'Latitude'],
+    #     ith_year_start = '1984',
+    #     ith_year_end = '2022',
+    #     write_or_return_result = 'write'
+    # )
+    
+    
+    # check if the result is already in the database
+    
+    db_path <- paste0(cache_path, 'factorial_exps/default_cultivar.sqlite')
+    if(!file.exists(db_path)){
+      # pass - no database
+    } else {
+      mydb <- dbConnect(RSQLite::SQLite(), db_path)
+      if(!(DBI::dbExistsTable(mydb, 'Ids'))){
+        # pass - no data
+      } else {
+        stored_ids <- dbReadTable(mydb, 'Ids')
+      }
+      dbDisconnect(mydb)
     }
-  wrapper_apsimx_factorial(
-      ith_lon = gps[i, 'lon'],
-      ith_lat = gps[i, 'lat'],
-      save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
-      factorial_file = 'SimulateFactorial.apsimx',
-      ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
-      cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
-      ith_year_start = '1984',
-      ith_year_end = '2022',
-      ith_base_file = "SimulateBasic_-90_34.apsimx"
-  )  
+    
+    stored_ids |> head()
+    
+    
+    in_db <- ((soils_i %in% stored_ids$SoilIdx) & 
+                (gps[i, 'Longitude'] %in% stored_ids$Longitude) &
+                (gps[i, 'Latitude'] %in% stored_ids$Latitude))
+    
+    ## Try to run the model if there is not an entry for it. ===================
+    if(!in_db){
+      # print(i)
+      # break
+      res <- NA
+      try(
+        res <- wrapper_apsimx_factorial_temp(
+          cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+          save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+          factorial_file = 'SimulateFactorialDaily.apsimx',
+          input_file_type = 'factorial',
+          soils_i = soils_i,
+          ith_lon = gps[i, 'Longitude'],
+          ith_lat = gps[i, 'Latitude'],
+          ith_year_start = '1984',
+          ith_year_end = '2022',
+          write_or_return_result = 'return'
+        )
+      )
+      ## Reduce the dataset size and add to database. ==========================
+      if(!(typeof(res) == 'NULL')){
+        M <- res
+        # Drop columns that aren't needed
+        res_select <- M[, c(
+          # Indepenent Variables
+          'ith_lon', 'ith_lat', 'soils_i', 'SowDate', 'Genotype', 'Date',
+          # Dependent Variables
+          'Maize.AboveGround.Wt', 'Maize.LAI', 'yield_Kgha'
+        )] |> 
+          rename(Longitude = ith_lon, Latitude = ith_lat, SoilIdx = soils_i)
+        
+        M <- res_select
+        # Drop rows without data
+        
+        # can get a tiny performance benefit from looking at the sum vs 0 instead of looking at each col. 
+        mask <- (M$Maize.AboveGround.Wt + M$Maize.LAI + M$Maize.AboveGround.Wt) == 0
+        M <- M[!mask, ]
+        # reduce down the genotype name's size
+        M$Genotype <- str_replace(M$Genotype, '.+ = ', '')
+        
+        # Split up tables
+        ## Attributes ====
+        res_ids <- M |> select(-Maize.AboveGround.Wt, -Maize.LAI, -yield_Kgha, -Date) |> distinct()
+        # add a uid col
+        res_ids['FactorialUID'] = NA
+        # need to look at database to find lowest unused uid.
+      
+        lowest_uid <- 0
+        # replace if there's pre-recorded data.
+        db_path <- paste0(cache_path, 'factorial_exps/default_cultivar.sqlite')
+        if(!file.exists(db_path)){
+          # pass - no database
+        } else {
+          mydb <- dbConnect(RSQLite::SQLite(), db_path)
+          if(!(DBI::dbExistsTable(mydb, 'Ids'))){
+            # pass - no data
+          } else {
+            stored_ids <- dbReadTable(mydb, 'Ids')
+            dbDisconnect(mydb)
+            # check that there are no matching factorial combinations in the database
+            res_ids <- left_join(res_ids, stored_ids)
+            # don't allow updating by default.
+            res_ids <- res_ids[is.na(res_ids$FactorialUID), ]
+            lowest_uid <- max(stored_ids$FactorialUID)
+          }
+        }
+        # add new uids
+        res_ids['FactorialUID'] <- lowest_uid + seq(1, nrow(res_ids['FactorialUID']))
+        res_ids$FactorialUID <- as.integer(res_ids$FactorialUID)
+        
+        ## Datasets ====
+        res_dvs <- left_join(distinct(M), res_ids) |> 
+          select(-Longitude, -Latitude, -SoilIdx, -SowDate, -Genotype)
+        # convert to date
+        res_dvs$Date <- as.numeric(lubridate::as_date(res_dvs$Date))
+        # now these tables are ready to insert. Could be further reduced by having a unique table for each genotype.
+        
+        mydb <- dbConnect(RSQLite::SQLite(),db_path)
+        dbWriteTable(mydb, 'Ids', res_ids, append = TRUE)
+        dbWriteTable(mydb, 'Results', res_dvs, append = TRUE)
+        dbDisconnect(mydb)
+      }
+    }
+    # if there was a result, clean output, split into tables and send to database
+  }
 }
 toc_outer <- Sys.time()
 print(toc_outer-tic_outer)
 ```
+
+```{r}
+
+```
+

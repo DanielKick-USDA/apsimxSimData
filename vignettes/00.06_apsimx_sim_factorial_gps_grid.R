@@ -1,8 +1,11 @@
+#```{r}
 library(tidyverse)
 library(apsimx)
 
-# apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
-# apsimx_options(examples.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\Examples')
+if (!str_detect(osVersion, 'Ubuntu')){
+  apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
+  apsimx_options(examples.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\Examples')
+}
 
 require(soilDB)
 require(sp)
@@ -10,30 +13,209 @@ require(sf)
 require(spData)
 
 devtools::load_all()
+if (!str_detect(getwd(), '/vignettes$')){setwd(paste0(getwd(), '/vignettes'))}
+#```
 
-
+#```{r}
 cache_path <- '../data/00.06_apsimx_sim_factorial_gps_grid/'
 ensure_dir_path_exists(dir_path = cache_path)
+#```
+
+## Setup for APSIMX template file.
+
+# Many cultivars
+#```{r cultivars tested}
+# [Field].Sow on a fixed date.Script.CultivarName = A_80, A_90, A_95, A_100, A_103, A_105, A_108, A_110, A_112, A_115, A_120, A_130, Atrium, B_80, B_90, B_95, B_100, B_103, B_105, B_108, B_110, B_112, B_115, B_120, B_130, CG4141, GH_5009, GH_5019WX, HY_110, Hycorn_40, Hycorn_53, Katumani, Laila, LY_110, Makueni, malawi_local, Melkassa, mh12, mh16, mh17, mh18, mh19, NSCM_41, P1197, Pioneer_3153, Pioneer_33M54, Pioneer_34K77, Pioneer_38H20, Pioneer_39G12, Pioneer_39V43, r201, r215, sc401, sc501, sc601, sc623, sc625, sr52
+#```
+
+# Varying planting days
+#```{r}
+planting_dates <- data.frame(
+  expand.grid(
+    years = 2000, # instead of including a leap year and non-leap year
+    # I only use one year and sample more heavily. Otherwise there
+    # would be doublets with larger gaps.
+    doy = seq(50, 170, by = 4)
+  )
+)
 
 
-modify_and_run_apsimx_factorial <- function(
+planting_dates$planting_date <- as.Date(planting_dates$doy,
+                                        origin = paste0(planting_dates$year, '-01-01'))
+# convert to day-month format
+planting_dates$planting_date <- unlist(
+  map(str_split(planting_dates$planting_date, '-'), function(e){
+    paste0(e[3], '-', month.abb[as.numeric(e[2])])
+  }))
+
+# string for apsimx
+paste(unique(planting_dates$planting_date), collapse = ', ' )
+#```
+
+
+
+
+## Parse Soils.apsimx
+#```{r}
+# Find all the soil models in the apsimx file that are in
+temp <- jsonlite::read_json("../inst/extdata/Soils.apsimx")
+
+soils_list <- list()
+
+state_n <- length(temp$Children[[2]]$Children)
+for(state_i in seq(1, state_n)){
+  state_entry <- temp$Children[[2]]$Children[[state_i]]
+  counties_n  <- length(state_entry$Children)
+  for(county_i in seq(1, counties_n)){
+    county_entry <- state_entry$Children[[county_i]]
+    entries_n    <- length(county_entry$Children)
+    for(entry_i in seq(1, entries_n)){
+      # Confirm the node we're at is a soil entry
+      if('Models.Soils.Soil, Models' == county_entry$Children[[entry_i]]$`$type`){
+        # print(c(state_i, county_i, entry_i))
+        soils_list[length(soils_list)+1] <- list(county_entry$Children[[entry_i]])
+      }
+    }
+  }
+}
+#```
+
+
+
+
+# Make a lookup df with metadata and constrain to contiguous US
+#```{r}
+soils_df <- do.call(rbind,
+                    purrr::map(soils_list, function(e){
+                      data.frame(
+                        State = e$State,
+                        Region = e$Region,
+                        Longitude = e$Longitude,
+                        Latitude = e$Latitude,
+                        SoilType = e$SoilType,
+                        ApsoilNumber = e$ApsoilNumber,
+                        Comments = e$Comments,
+                        Name = e$Name
+                      )
+                    }))
+
+soils_df['soils_list_i'] <- seq(1, nrow(soils_df))
+
+# Constrain to contiguous us
+soils_df <- soils_df |> filter(!(State %in% c('Alaska', 'Hawaii')))
+
+soils_df[((soils_df$Longitude == 0) | (is.na(soils_df$Longitude)) &
+            ((soils_df$Latitude == 0) | (is.na(soils_df$Latitude)))), c('Longitude', 'Latitude')] <- NA
+
+soils_df |>
+  mutate(MissingGPS = case_when(is.na(Longitude) ~ 'NoGPS',
+                                !is.na(Longitude) ~ 'GPS')) |>
+  mutate(Longitude = case_when(is.na(Longitude) ~ 0, !is.na(Longitude) ~ Longitude),
+         Latitude = case_when(is.na(Latitude) ~ 0, !is.na(Latitude) ~ Latitude)) |>
+  ggplot(aes(Longitude, Latitude))+
+  geom_point()+
+  facet_wrap(~MissingGPS, scales='free' )+
+  labs(title = 'Note that some regional soils have no lon/lat')
+#```
+
+
+
+#```{r}
+# these soils are failing to run. I'm not removing them so that the ordering stays consistent with the files I've already run but I will prevent them from matching with any queries by setting there lon/lat to NA
+
+# I found these by stepping through all soils in the soil_list and trying to run a basic model.
+mask <- soils_df$soils_list_i %in% c(139, 150, 159, 170, 174, 184, 186, 235, 250, 252, 258, 263, 268, 283, 285, 320)
+soils_df[mask, c('Longitude', 'Latitude')] <- NA
+#```
+
+
+#```{r get dist relative to valid soils}
+library(geodist)
+# take in a lon/lat find closest entry. Will not be useful for the entries at 0,0
+calc_dist_vs_soil_df <- function(
+    ith_lon,
+    ith_lat
+){
+  dists <- geodist(
+    rbind(data.frame(
+      Longitude = ith_lon,
+      Latitude = ith_lat),
+      soils_df[, c('Longitude', 'Latitude')]),
+    measure = "geodesic")
+  # in meters
+  return(dists[1, 2:ncol(dists)])
+}
+#```
+
+
+#```{r}
+# Unfortunately there are not matching "Name" entries nor are comments setup in similar ways. Due to this I'm going to use distance to set up the pairings. Because I can't match entries by these varaibles I'm usign location which
+closest_soils_list_entry <- function(ith_lon,
+                                     ith_lat){
+
+  metadata <- data.frame(Longitude = ith_lon,
+                         Latitude = ith_lat)
+  # look at distance
+  soils_df['temp_dist'] <- calc_dist_vs_soil_df(
+    ith_lon = metadata[1, 'Longitude'],
+    ith_lat = metadata[1, 'Latitude']
+  )
+  return(soils_df[which.min(soils_df$temp_dist), 'soils_list_i'])
+}
+#```
+
+
+#```{r}
+# given a json file (so it need not be read in over and over again), and desired soil, write out with the desired soil
+replace_soil_in_json <- function(
+    input_json_file = jsonlite::read_json(paste0(cache_path, 'SimulateFactorial_Tiny.apsimx')),
+    replacement_soil = soils_list[[1]],
+    input_file_type = 'basic', # 'factorial'
+    output_dir = cache_path
+){
+  if(input_file_type == 'basic'){
+    # replacement should be of type "Models.Soils.Soil, Models"
+    if(input_json_file$Children[[2]]$Children[[5]]$Children[[2]]$`$type` != "Models.Soils.Soil, Models"){
+      print('Input not of basic apsimx format. Has the soils module been moved?')
+    } else {
+      input_json_file$Children[[2]]$Children[[5]]$Children[[2]] <- replacement_soil
+    }
+  }
+
+  if(input_file_type == 'factorial'){
+    # replacement should be of type "Models.Soils.Soil, Models"
+    if(input_json_file$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$`$type` != "Models.Soils.Soil, Models"){
+      print('Input not of basic apsimx format. Has the soils module been moved?')
+    } else {
+      input_json_file$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]] <- replacement_soil
+    }
+  }
+
+  jsonlite::write_json(input_json_file,
+                       paste0(output_dir, 'temp.apsimx'),
+                       pretty = TRUE,
+                       digits = NA, auto_unbox = TRUE, null = "null",
+                       na = "null")
+}
+#```
+
+
+#```{r}
+# Warning! needs soils_list, soils_df in global scope
+modify_and_run_apsimx_temp <- function(
     ith_lon = -86.52960,
     ith_lat = 34.72952,
     cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
     factorial_file = 'SimulateFactorial_Tiny.apsimx',
-    # this should be fixed. If I change the base apsimx file then it should change
-    ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+    input_file_type = 'factorial', # 'basic'
+    soils_i = 1,
     ith_year_start = '1984',
-    ith_year_end = '2022',
-    ith_base_file = "SimulateBasic_-90_34.apsimx"
+    ith_year_end = '2022'
 ){
   # Setup ----
   # set up some state variables so that the simulation is run only if the needed inputs are available.
-  ssurgo_data_ready  <- FALSE # SSURGO downloaded?
-  ssurgo_names_match <- FALSE # Names in json match? (Is the position in the list of lists right?)
   met_data_ready     <- FALSE # Met downloaded?
   met_lines_match    <- FALSE # Exactly one line in the apsimx file to update?
-  factorial_temp_file <- NA # If there is no soil data this file won't exist.
 
   # get weather and soil data
   try(
@@ -53,55 +235,13 @@ modify_and_run_apsimx_factorial <- function(
   )
 
   # Work with Soil Data ----
-  # Modify a base_file to insert soil data
-  ith_ssurgo_path <- paste0(cache_path,
-                            'ssurgo/',
-                            paste0(as.character(ith_lon),'_', as.character(ith_lat),'.RDS'))
+  replace_soil_in_json(
+    input_json_file = jsonlite::read_json(paste0(cache_path, factorial_file)),
+    replacement_soil = soils_list[[soils_i]],
+    input_file_type = input_file_type,
+    output_dir = cache_path
+  )
 
-  # update state variable
-  ssurgo_data_ready <- file.exists(ith_ssurgo_path)
-
-  # put soil data in simple file
-  if(ssurgo_data_ready){
-    edit_tag = '_temp_soil'
-    temp_file <- paste0(str_replace(ith_base_file, '\\.apsimx$', ''), edit_tag, '.apsimx')
-
-    surgo_dat <- readRDS(ith_ssurgo_path)
-
-    edit_apsimx_replace_soil_profile(
-      file = ith_base_file,
-      src.dir = cache_path,
-      soil.profile = surgo_dat[[1]],
-      edit.tag = edit_tag
-    )
-  }
-
-  # Move soil dat into complex file
-  if(ssurgo_data_ready){
-    # Now look at the json of the new file and target experiment
-    factorial_file_json <- jsonlite::read_json(paste0(cache_path, factorial_file))
-    temp_file_json      <- jsonlite::read_json(paste0(cache_path, temp_file))
-
-    replacement_soil <- temp_file_json$Children[[2]]$Children[[5]]
-
-    current_soil <- factorial_file_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]
-
-    # check if the names match
-    ssurgo_names_match <- 1 == mean(names(replacement_soil) == names(current_soil))
-
-    if(ssurgo_names_match){
-      # overwrite with the values
-      factorial_file_json$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]] <- replacement_soil
-
-      factorial_temp_file <- paste0(str_replace(factorial_file, '\\.apsimx', ''), edit_tag, '.apsimx')
-
-      jsonlite::write_json(factorial_file_json,
-                           paste0(cache_path, factorial_temp_file),
-                           pretty = TRUE,
-                           digits = NA, auto_unbox = TRUE, null = "null",
-                           na = "null")
-    }
-  }
   # Work with Weather Data ----
   ith_met_path <- paste0(cache_path,
                          'power/',
@@ -114,14 +254,18 @@ modify_and_run_apsimx_factorial <- function(
                                 '.met'))
 
   met_data_ready <- file.exists(ith_met_path)
-  if((met_data_ready & !is.na(factorial_temp_file))){
+  if(met_data_ready){
 
-    factorial_file_text <- read_file(paste0(cache_path, factorial_temp_file))
+    factorial_file_text <- read_file(paste0(cache_path, 'temp.apsimx'))
     factorial_file_text <- unlist(str_split(factorial_file_text, '\\n'))
 
     ith_met_path <- str_split(ith_met_path, pattern = '/')[[1]]
     replace_met <- ith_met_path[length(ith_met_path)]
 
+    # Now I'll pull out the met file name instead of passing it in.
+    ith_expect_met <- factorial_file_text[str_detect(
+      string = factorial_file_text, '"FileName":.+\\.met')]
+    ith_expect_met <- str_extract(ith_expect_met, '[\\w-.]+\\.met')
 
     mask <- str_detect(string = factorial_file_text, ith_expect_met)
     relevant_line <- factorial_file_text[mask]
@@ -132,19 +276,16 @@ modify_and_run_apsimx_factorial <- function(
       factorial_file_text[mask] <- replacement_line
       factorial_file_text <- paste(factorial_file_text, collapse = '\n')
       write_file(factorial_file_text,
-                 paste0(cache_path, factorial_temp_file))
+                 paste0(cache_path, 'temp.apsimx'))
     }
   }
 
   # If the tests pass, then run the file ----
-  if((ssurgo_data_ready &
-      ssurgo_names_match &
-      met_data_ready &
-      met_lines_match &
-      !is.na(factorial_temp_file))){
+  if((met_data_ready &
+      met_lines_match)){
 
     res <- apsimx(
-      file = factorial_temp_file,
+      file = 'temp.apsimx',
       src.dir = cache_path,
       value = "report")
 
@@ -158,22 +299,36 @@ modify_and_run_apsimx_factorial <- function(
       SowDate = NA, Genotype = NA, Zone = NA, Clock.Today = NA,
       Maize.AboveGround.Wt = NA, Maize.LAI = NA, yield_Kgha = NA, Date = NA
     )
+    # and also copy the file so that I can audit it and figure out why it did not work.
+    ensure_dir_path_exists(paste0(cache_path, 'apsimx_audits/'))
+    file.copy(paste0(cache_path, 'temp.apsimx'),
+              paste0(cache_path, 'apsimx_audits/',  paste(c(ith_lon, ith_lat, ith_year_start, ith_year_end, soils_i, 'temp.apsimx'), collapse = '__' )))
   }
-  return(cbind(data.frame(ith_lon, ith_lat, ith_year_start, ith_year_end, factorial_file), res))
+
+  # delete the temp files
+  if('temp.apsimx' %in% list.files(cache_path)){
+    unlink(paste0(cache_path, 'temp.apsimx'))
+  }
+  if('temp.db' %in% list.files(cache_path)){
+    unlink(paste0(cache_path, 'temp.db'))
+  }
+
+  return(cbind(data.frame(ith_lon, ith_lat, ith_year_start, ith_year_end, soils_i, factorial_file), res))
 }
+#```
 
 
-wrapper_apsimx_factorial <- function(
-    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
-    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
-    factorial_file = 'SimulateFactorial_Tiny.apsimx',
-    # this should be fixed. If I change the base apsimx file then it should change
-    ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
+#```{r}
+wrapper_apsimx_factorial_temp <- function(
     ith_lon = -86.52960,
     ith_lat = 34.72952,
+    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    factorial_file = 'SimulateFactorial_Tiny.apsimx',
+    input_file_type = 'factorial',
+    soils_i = 1,
     ith_year_start = '1984',
     ith_year_end = '2022',
-    ith_base_file = "SimulateBasic_-90_34.apsimx"
+    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/" # This is for the output not the inputs.
 ){
   # Same approach as `run_and_store_apsimx_for_gps` but for a factorial experiment
   ensure_dir_path_exists(cache_path)
@@ -183,30 +338,34 @@ wrapper_apsimx_factorial <- function(
                         as.character(ith_lat),
                         as.character(ith_year_start),
                         as.character(ith_year_end),
+                        as.character(soils_i),
                         str_replace(factorial_file, '\\.apsimx$', '')
   ), collapse = '__')
   save_name <- paste0(save_name, '.csv')
 
   print(save_name)
   if(!file.exists(paste0(save_path,save_name))){
-    res = modify_and_run_apsimx_factorial(
-      cache_path = cache_path,
-      factorial_file = factorial_file,
-      ith_expect_met = ith_expect_met,
+    res <- modify_and_run_apsimx_temp(
       ith_lon = ith_lon,
       ith_lat = ith_lat,
+      cache_path = cache_path,
+      factorial_file  = factorial_file,
+      input_file_type = input_file_type,
+      soils_i = soils_i,
       ith_year_start = ith_year_start,
-      ith_year_end = ith_year_end,
-      ith_base_file = ith_base_file
+      ith_year_end   = ith_year_end
     )
 
     write.csv(res, paste0(save_path,save_name))
   }
 }
+#```
 
 
 
-# run on all g2f locations ----
+# run on all g2f locations
+
+#```{r points to use}
 gps <- read.csv('../inst/extdata/gps_coords.csv')
 gps <- gps[!stringr::str_detect(gps[, 'Env'], '^ONH.+'), ]
 gps <- gps[!stringr::str_detect(gps[, 'Env'], '^GEH.+'), ]
@@ -216,11 +375,17 @@ gps <- gps %>%
          lon = Longitude_of_Field) %>%
   select(lat, lon) %>%
   distinct()
+#```
 
 
+#```{r}
 tic_outer <- Sys.time()
 tics <- c()
 for(i in seq(1, nrow(gps))){
+  temp_files = list.files("../data/00.06_apsimx_sim_factorial_gps_grid/")
+  for(temp_file in temp_files[str_detect(temp_files, 'temp\\..+')]){
+    unlink(paste0("../data/00.06_apsimx_sim_factorial_gps_grid/", temp_file))
+  }
   ## all because I don't have tqdm ====
   tics[length(tics)+1] <- Sys.time()
   if(length(tics)>1){
@@ -232,35 +397,94 @@ for(i in seq(1, nrow(gps))){
     print(paste0(minutes, ':', if(as.numeric(sec)>=9){sec}else{paste0('0', sec)}))
     print(paste(rep('-', 80), collapse = ''))
   }
-  wrapper_apsimx_factorial(
-    ith_lon = gps[i, 'lon'],
-    ith_lat = gps[i, 'lat'],
-    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
-    # factorial_file = 'SimulateFactorial_Tiny.apsimx', # 'SimulateFactorial.apsimx',
-    factorial_file = 'SimulateFactorial.apsimx',
-    ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
-    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
-    ith_year_start = '1984',
-    ith_year_end = '2022',
-    ith_base_file = "SimulateBasic_-90_34.apsimx"
+  soils_i <- closest_soils_list_entry(ith_lon = gps[i, 'lon'],
+                                      ith_lat = gps[i, 'lat'])
+  try(
+    wrapper_apsimx_factorial_temp(
+      cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+      save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+      factorial_file = 'SimulateFactorialDaily.apsimx',
+      input_file_type = 'factorial',
+      soils_i = soils_i,
+      ith_lon = gps[i, 'lon'],
+      ith_lat = gps[i, 'lat'],
+      ith_year_start = '1984',
+      ith_year_end = '2022'
+    )
   )
 }
 toc_outer <- Sys.time()
 print(toc_outer-tic_outer)
+#```
+
+## Repeat for grid over usa
+### Load GPS Data
+#```{r}
+if(file.exists(paste0(cache_path, 'gps_grid_soil_match.csv'))){
+  gps <- read.csv(paste0(cache_path, 'gps_grid_soil_match.csv'))
+}else{
+  gps <- read.csv('../data/00.01_setup_USA_env_gps_grid/gps_grid.csv') %>% rename(Latitude = lat, Longitude = lon)
+
+  gps['MinKm'] <- -1
+  gps['soil_i_or_is'] <- -1
+
+  # Would be faster to compute vornoi regions and then check which a coordinate pair fell in but this is fast enough.
+  for(i in seq(1, nrow(gps))){
+    soil_temp <- soils_df[, c("Longitude", "Latitude")]
+    soil_temp[is.na(soil_temp$Longitude), "Longitude"] <- 0
+    soil_temp[is.na(soil_temp$Latitude), "Latitude"] <- 0
+
+    dists <- geodist(
+      rbind(gps[i, c("Longitude", "Latitude")],
+            soil_temp[, c("Longitude", "Latitude")]),
+      measure = 'geodesic'
+    )
+    min_dist <- min(dists[1, 2:ncol(dists)], na.rm = TRUE)
+    min_i_or_is <- c(1:(ncol(dists)-1))[dists[1, 2:ncol(dists)] == min_dist]
+    min_i_or_is <- paste(as.character(min_i_or_is), collapse = '-')
+
+    gps[i, 'MinKm'] <- min_dist/1000
+    gps[i, 'soil_i_or_is'] <- min_i_or_is
+  }
+  write.csv(gps, paste0(cache_path, 'gps_grid_soil_match.csv'))
+}
+
+gps %>%
+  ggplot(aes(x = Longitude, y = Latitude, color = MinKm))+
+  geom_point()
+
+gps %>%
+  ggplot(aes(x = MinKm))+
+  geom_density()
+
+gps %>%
+  ggplot(aes(x = Longitude, y = Latitude, color = MinKm<100))+
+  geom_point()
+
+gps %>%
+  ggplot(aes(x = Longitude, y = Latitude, color = soil_i_or_is))+
+  geom_point()+
+  theme(legend.position = '')
 
 
-# Repeat for grid over usa ----
-gps <- read.csv('../data/00.01_setup_USA_env_gps_grid/gps_grid.csv')
 
-# no seed needed here. This is just to make sure that the sampling order is random.
-gps[['order']] <- sample(1:nrow(gps))
-gps <- gps %>% arrange(order)
+gps %>% filter(MinKm<100) %>%
+  ggplot(aes(x = Longitude, y = Latitude, color = soil_i_or_is))+
+  geom_point()+
+  theme(legend.position = '')
 
-# for unknown reasons apsimx::get_ssurgo_soil_profile(lonlat = lonlat) is failing here, causing the error "Error: $ operator is invalid for atomic vectors"
-# I copied the
+gps <- gps %>% filter(MinKm<100)
+#```
+
+#```{r}
+# similar to above, but this one uses precomputed soil i (or is)
 tic_outer <- Sys.time()
 tics <- c()
 for(i in seq(1, nrow(gps))){
+  temp_files = list.files("../data/00.06_apsimx_sim_factorial_gps_grid/")
+  for(temp_file in temp_files[str_detect(temp_files, 'temp\\..+')]){
+    unlink(paste0("../data/00.06_apsimx_sim_factorial_gps_grid/", temp_file))
+  }
   ## all because I don't have tqdm ====
   tics[length(tics)+1] <- Sys.time()
   if(length(tics)>1){
@@ -272,17 +496,32 @@ for(i in seq(1, nrow(gps))){
     print(paste0(minutes, ':', if(as.numeric(sec)>=9){sec}else{paste0('0', sec)}))
     print(paste(rep('-', 80), collapse = ''))
   }
-  wrapper_apsimx_factorial(
-    ith_lon = gps[i, 'lon'],
-    ith_lat = gps[i, 'lat'],
-    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
-    factorial_file = 'SimulateFactorial.apsimx',
-    ith_expect_met = '-86.5296_34.72952_2014-01-01_2014-12-31.met',
-    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
-    ith_year_start = '1984',
-    ith_year_end = '2022',
-    ith_base_file = "SimulateBasic_-90_34.apsimx"
-  )
+  # soils_i <- closest_soils_list_entry(ith_lon = gps[i, 'lon'],
+  #                                     ith_lat = gps[i, 'lat'])
+
+  soil_i_or_is <- gps[i, 'soil_i_or_is']
+  for(soils_i in unlist(str_split(soil_i_or_is, '-'))){
+    soils_i <- as.numeric(soils_i)
+    try(
+      wrapper_apsimx_factorial_temp(
+        cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+        save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+        factorial_file = 'SimulateFactorialDaily.apsimx',
+        input_file_type = 'factorial',
+        soils_i = soils_i,
+        ith_lon = gps[i, 'Longitude'],
+        ith_lat = gps[i, 'Latitude'],
+        ith_year_start = '1984',
+        ith_year_end = '2022'
+      )
+    )
+  }
 }
 toc_outer <- Sys.time()
 print(toc_outer-tic_outer)
+#```
+
+#```{r}
+saveRDS(soils_list, file = paste0(cache_path, 'soils_df'))
+write.csv(soils_df, file = paste0(cache_path, 'soils_df'))
+#```
