@@ -1,0 +1,1110 @@
+---
+title: "00.06_apsimx_sim_factorial_gps_grid_new_cultivars"
+format: html
+editor: source
+---
+
+This file is basically a repeat of 00.04 but uses what I learned from that file and from 00.05 to speed up computation by using apsimx to run the factorials for each site rather than calling apsimx once per condition set.
+
+```{r}
+library(tidyverse)
+library(apsimx)
+
+if (!str_detect(osVersion, 'Ubuntu')){
+  apsimx_options(exe.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\bin\\ApsimNG.exe')
+  apsimx_options(examples.path = 'C:\\Users\\drk8b9\\AppData\\Local\\Programs\\APSIM2023.5.7219.0\\Examples')
+}
+
+require(soilDB)
+require(sp)
+require(sf)
+require(spData)
+require(DBI)
+require(jsonlite)
+
+devtools::load_all()
+if (!str_detect(getwd(), '/vignettes$')){setwd(paste0(getwd(), '/vignettes'))}
+```
+
+```{r}
+cache_path <- '../data/00.06_apsimx_sim_factorial_gps_grid/'
+ensure_dir_path_exists(dir_path = cache_path)
+```
+
+
+```{r}
+# This is a very clear explaination for adding new cultivars. 
+# https://www.youtube.com/watch?v=ZE0cAPoKk2k
+# once one is added it appears that it shows up in the 
+
+# Extract example cultivars
+M <- jsonlite::read_json("../inst/extdata/MaizeGEM.apsimx")
+
+cultivar_folder <- M$Children[[2]]$Children[[1]]$Children[[20]]$Children
+
+res_list <- map(1:32, # 33 is a folder and 34 is a custom entry from the workshop
+function(i){
+  if(cultivar_folder[[i]]$`$type` != 'Models.PMF.Cultivar, Models'){
+    return(NA)
+  }else{
+    return(list(
+      'Key' = as.character(cultivar_folder[[i]]$Name),
+     'Values' = unlist(cultivar_folder[[i]]$Command)))
+  }
+  
+})
+
+# repeat for generics
+res_list2 <- map(1:27, 
+function(i){
+  if(cultivar_folder[[33]]$Children[[i]]$`$type` != 'Models.PMF.Cultivar, Models'){
+    return(NA)
+  }else{
+    return(list(
+      'Key' = as.character(cultivar_folder[[33]]$Children[[i]]$Name),
+     'Values' = unlist(cultivar_folder[[33]]$Children[[i]]$Command)))
+  }
+  
+})
+
+
+res_list <- c(res_list, res_list2) 
+
+temp <- map(seq_along(res_list), function(ii){
+  ee <- res_list[[ii]]
+  out <- data.frame(join_on = TRUE)
+  for(i in seq_along(ee$Values)){
+    # print(paste(rep('#', 80), collapse = ''))
+    # print(ii)
+    # print(i)
+    e <- ee$Values[[i]]
+    e <- str_replace_all(e, ' ', '') %>% str_split( '=') %>% unlist()
+    # Pioneer_3153 seems to include no values
+    if(length(e) == 1){
+      e[2] <- ""
+    }
+    # if there are multiple entries, unpack them
+    if( str_detect(e[2], ',')){
+      xx <- data.frame(unlist(str_split(e[2], ','))) 
+      vals <- unlist(str_split(e[2], ','))
+      xx <- do.call(cbind, map(seq_along(vals), function(j){
+              xx <- data.frame(vals[j])
+              names(xx) <- paste(e[1], '__', as.character(j), sep = '')
+              return(xx)
+      }))
+    }else{
+      xx <- data.frame(e[2]) 
+          names(xx) <- e[1]
+    } 
+
+    xx['join_on'] <- TRUE
+    out <- full_join(out, xx, relationship = 'many-to-many')
+  }
+  out['Key'] <- ee$Key
+  return(out)
+})
+
+out <- temp[[1]]
+for( i in seq(2, length(temp))){
+  out <- full_join(out, temp[[i]])
+}
+# there's a column without a name. Probably a blank line in the command file.
+names(out) <- unlist(map(names(out), 
+                         function(e){if(e == ''){return('blank')}else{return(e)}
+                           }))
+out <- out %>% select(-join_on, -blank) %>% as_tibble()
+param_cols <- names(out)[names(out) != 'Key']
+out <- out[, c('Key', param_cols)]
+
+# contains no modifications
+out <- out %>% filter(Key != 'Pioneer_3153')
+
+param_import <- data.frame(
+  param = param_cols,
+  pr = unlist(map(param_cols, function(param_col){mean(!is.na(out[param_col]))}))
+  ) %>% arrange(desc(pr))
+
+param_import %>% 
+  ggplot(aes(x = pr))+ geom_histogram()
+```
+
+```{r}
+param_import %>% filter(pr >= .75)
+
+param_import %>% filter(pr <= .75) %>% filter(pr >= .25)
+
+# param_col <- param_cols[1]
+# is_required <- mean(is.na(out[param_col])) == 0
+
+out %>%
+  pivot_longer(cols = param_cols) %>%
+  mutate(value = as.numeric(value)) %>%
+  ggplot(aes(value, name))+
+  geom_point()
+
+# out[param_col]
+ 
+# write.csv(out, "~/../Downloads/temp.csv")
+
+param_cols_filter <- unlist(select(filter(param_import, pr >= .25), param))
+
+param_ranges <- do.call(rbind, map(param_cols_filter, function(e){
+  xx <- as.numeric(out[[ e ]] )
+  return(data.frame(
+    param = e,
+    min = min(xx, na.rm = TRUE),
+    max = max(xx, na.rm = TRUE)
+    ))
+}))
+
+
+param_ranges <- param_ranges %>% 
+  arrange(param) %>% 
+  mutate(include = FALSE)
+
+param_ranges
+```
+
+
+
+
+
+
+#init
+
+```{r}
+if(!file.exists(paste0(cache_path, "cultivar_sim_exps/sim_cultivar.sqlite"))){
+  # full and select parameter tables
+  names(out) <- str_replace(str_replace(names(out), '\\[', ''), '\\]', '')
+  out <- out %>% rename(Genotype = Key)
+  
+  mydb <- dbConnect(RSQLite::SQLite(), paste0(cache_path, "cultivar_sim_exps/sim_cultivar.sqlite"))
+  dbWriteTable(mydb, 'DefaultCultivarsAll', out, append = TRUE)
+  
+  # Restrict to only those cultivars which exclusively use these factors
+  simulated_factors <- c(
+    "Grain.MaximumGrainsPerCob.FixedValue",
+    "Grain.MaximumPotentialGrainSize.FixedValue",
+    "Phenology.FlagLeafToFlowering.Target.FixedValue",
+    "Phenology.FloweringToGrainFilling.Target.FixedValue",
+    "Phenology.GrainFilling.Target.FixedValue",
+    "Phenology.Juvenile.Target.FixedValue",
+    "Phenology.Maturing.Target.FixedValue",
+    "Phenology.MaturityToHarvestRipe.Target.FixedValue",
+    "Phenology.Photosensitive.Target.XYPairs.X__1",
+    "Phenology.Photosensitive.Target.XYPairs.X__2",
+    "Phenology.Photosensitive.Target.XYPairs.X__3",
+    "Phenology.Photosensitive.Target.XYPairs.Y__1",
+    "Phenology.Photosensitive.Target.XYPairs.Y__2",
+    "Phenology.Photosensitive.Target.XYPairs.Y__3",
+    "Rachis.DMDemands.Structural.DMDemandFunction.MaximumOrganWt.FixedValue")
+  
+  select_default_cultivars <- unlist(map(out$Genotype, function(key){
+    unsimulated_params_bool <- FALSE %in% is.na(
+      unlist(out[out$Genotype == key, names(out)[!(names(out) %in% c('Genotype', simulated_factors))]])
+    )
+    if(unsimulated_params_bool){return(NA)} else {return(key)}
+  }))
+  select_default_cultivars <- select_default_cultivars[!is.na(select_default_cultivars)]
+  
+  out <- out[out$Genotype %in% select_default_cultivars, c('Genotype', simulated_factors) ] 
+  
+  # add back in the most default cultivar of them all 'Pioneer_3153'
+  temp <- out[1, ]
+  temp[, simulated_factors] <- NA
+  temp[, 'Genotype'] <- 'Pioneer_3153'
+  out <- rbind(temp, out)
+  
+  dbWriteTable(mydb, 'Genotypes', out, append = TRUE)
+  dbDisconnect(mydb)
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Setup for APSIMX template file.
+
+Many cultivars
+```{r cultivars tested}
+# [Field].Sow on a fixed date.Script.CultivarName = A_80, A_90, A_95, A_100, A_103, A_105, A_108, A_110, A_112, A_115, A_120, A_130, Atrium, B_80, B_90, B_95, B_100, B_103, B_105, B_108, B_110, B_112, B_115, B_120, B_130, CG4141, GH_5009, GH_5019WX, HY_110, Hycorn_40, Hycorn_53, Katumani, Laila, LY_110, Makueni, malawi_local, Melkassa, mh12, mh16, mh17, mh18, mh19, NSCM_41, P1197, Pioneer_3153, Pioneer_33M54, Pioneer_34K77, Pioneer_38H20, Pioneer_39G12, Pioneer_39V43, r201, r215, sc401, sc501, sc601, sc623, sc625, sr52
+```
+
+Varying planting days
+```{r}
+# planting_dates <- data.frame(
+#   expand.grid(
+#     years = 2000, # instead of including a leap year and non-leap year 
+#                   # I only use one year and sample more heavily. Otherwise there
+#                   # would be doublets with larger gaps.
+#     doy = seq(50, 170, by = 4) 
+#     )
+#   )
+# 
+# 
+# planting_dates$planting_date <- as.Date(planting_dates$doy, 
+#                                         origin = paste0(planting_dates$year, '-01-01'))
+# # convert to day-month format
+# planting_dates$planting_date <- unlist(
+#   map(str_split(planting_dates$planting_date, '-'), function(e){
+#     paste0(e[3], '-', month.abb[as.numeric(e[2])])
+# }))
+# 
+# # string for apsimx
+# paste(unique(planting_dates$planting_date), collapse = ', ' )
+```
+
+
+
+
+## Parse Soils.apsimx
+```{r}
+# Find all the soil models in the apsimx file that are in 
+temp <- jsonlite::read_json("../inst/extdata/Soils.apsimx")
+
+soils_list <- list()
+
+state_n <- length(temp$Children[[2]]$Children)
+for(state_i in seq(1, state_n)){
+  state_entry <- temp$Children[[2]]$Children[[state_i]]
+  counties_n  <- length(state_entry$Children)
+  for(county_i in seq(1, counties_n)){
+    county_entry <- state_entry$Children[[county_i]]
+    entries_n    <- length(county_entry$Children)
+    for(entry_i in seq(1, entries_n)){
+      # Confirm the node we're at is a soil entry
+      if('Models.Soils.Soil, Models' == county_entry$Children[[entry_i]]$`$type`){
+        # print(c(state_i, county_i, entry_i))
+        soils_list[length(soils_list)+1] <- list(county_entry$Children[[entry_i]])
+      }      
+    }
+  }
+}
+```
+
+
+
+
+# Make a lookup df with metadata and constrain to contiguous US
+```{r}
+soils_df <- do.call(rbind, 
+                    purrr::map(soils_list, function(e){
+                      data.frame(
+                        State = e$State,
+                        Region = e$Region,
+                        Longitude = e$Longitude,
+                        Latitude = e$Latitude,
+                        SoilType = e$SoilType,
+                        ApsoilNumber = e$ApsoilNumber,
+                        Comments = e$Comments,
+                        Name = e$Name
+                        )  
+                    })) 
+
+soils_df['soils_list_i'] <- seq(1, nrow(soils_df))
+
+# Constrain to contiguous us
+soils_df <- soils_df |> filter(!(State %in% c('Alaska', 'Hawaii')))
+
+soils_df[((soils_df$Longitude == 0) | (is.na(soils_df$Longitude)) &
+           ((soils_df$Latitude == 0) | (is.na(soils_df$Latitude)))), c('Longitude', 'Latitude')] <- NA
+
+soils_df |> 
+  mutate(MissingGPS = case_when(is.na(Longitude) ~ 'NoGPS',
+                                !is.na(Longitude) ~ 'GPS')) |>
+  mutate(Longitude = case_when(is.na(Longitude) ~ 0, !is.na(Longitude) ~ Longitude), 
+         Latitude = case_when(is.na(Latitude) ~ 0, !is.na(Latitude) ~ Latitude)) |>
+  ggplot(aes(Longitude, Latitude))+
+  geom_point()+
+  facet_wrap(~MissingGPS, scales='free' )+
+  labs(title = 'Note that some regional soils have no lon/lat')
+```
+
+
+
+```{r}
+# these soils are failing to run. I'm not removing them so that the ordering stays consistent with the files I've already run but I will prevent them from matching with any queries by setting there lon/lat to NA
+
+# I found these by stepping through all soils in the soil_list and trying to run a basic model.
+mask <- soils_df$soils_list_i %in% c(139, 150, 159, 170, 174, 184, 186, 235, 250, 252, 258, 263, 268, 283, 285, 320)
+soils_df[mask, c('Longitude', 'Latitude')] <- NA
+```
+
+
+## Small scale test
+Using the factorial experiment file `SimulateFactorial_Tiny.apsimx` which contains only two cultivars, confirm that that I can change the necessary soil and weather inputs. 
+
+
+```{r get dist relative to valid soils}
+library(geodist)
+# take in a lon/lat find closest entry. Will not be useful for the entries at 0,0
+calc_dist_vs_soil_df <- function(
+    ith_lon,
+    ith_lat
+    ){
+  dists <- geodist(
+    rbind(data.frame(
+      Longitude = ith_lon,
+      Latitude = ith_lat),
+      soils_df[, c('Longitude', 'Latitude')]), 
+          measure = "geodesic")
+  # in meters
+  return(dists[1, 2:ncol(dists)])
+}
+```
+
+
+```{r}
+# Unfortunately there are not matching "Name" entries nor are comments setup in similar ways. Due to this I'm going to use distance to set up the pairings. Because I can't match entries by these varaibles I'm usign location which 
+closest_soils_list_entry <- function(ith_lon,
+                                     ith_lat){
+  
+  metadata <- data.frame(Longitude = ith_lon,
+                         Latitude = ith_lat)
+  # look at distance
+  soils_df['temp_dist'] <- calc_dist_vs_soil_df(
+    ith_lon = metadata[1, 'Longitude'],
+    ith_lat = metadata[1, 'Latitude']
+  )
+  return(soils_df[which.min(soils_df$temp_dist), 'soils_list_i'])
+}
+```
+
+
+```{r}
+# given a json file (so it need not be read in over and over again), and desired soil, write out with the desired soil 
+replace_soil_in_json <- function(
+  input_json_file = jsonlite::read_json(paste0(cache_path, 'SimulateFactorial_Tiny.apsimx')),
+  replacement_soil = soils_list[[1]],
+  input_file_type = 'basic', # 'factorial'
+  output_dir = cache_path
+  ){
+  if(input_file_type == 'basic'){
+    # replacement should be of type "Models.Soils.Soil, Models"
+    if(input_json_file$Children[[2]]$Children[[5]]$Children[[2]]$`$type` != "Models.Soils.Soil, Models"){
+      print('Input not of basic apsimx format. Has the soils module been moved?')
+    } else {
+      input_json_file$Children[[2]]$Children[[5]]$Children[[2]] <- replacement_soil
+    }
+  }
+  
+  if(input_file_type == 'factorial'){
+    # replacement should be of type "Models.Soils.Soil, Models"
+    if(input_json_file$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]]$`$type` != "Models.Soils.Soil, Models"){
+      print('Input not of basic apsimx format. Has the soils module been moved?')
+    } else {
+      input_json_file$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[2]] <- replacement_soil
+    }
+  }
+  
+  jsonlite::write_json(input_json_file, 
+                       paste0(output_dir, 'temp.apsimx'), 
+                       pretty = TRUE, 
+                       digits = NA, auto_unbox = TRUE, null = "null", 
+                       na = "null")
+}
+```
+
+
+```{r}
+# Warning! needs soils_list, soils_df in global scope
+modify_and_run_apsimx_temp <- function(
+    ith_lon = -86.52960,
+    ith_lat = 34.72952,
+    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    factorial_file = 'SimulateFactorial_Tiny.apsimx',  
+    input_file_type = 'factorial', # 'basic'
+    soils_i = 1,
+    ith_year_start = '1984',
+    ith_year_end = '2022'
+){
+  # Setup ----
+  # set up some state variables so that the simulation is run only if the needed inputs are available.
+  met_data_ready     <- FALSE # Met downloaded?
+  met_lines_match    <- FALSE # Exactly one line in the apsimx file to update?
+  
+  # get weather and soil data
+  try(
+    run_apsimx_for_gps(
+      lon = ith_lon,
+      lat = ith_lat,
+      year_start = ith_year_start,
+      year_end = ith_year_end,
+      met_dir = paste0(cache_path, 'power/'),
+      ssurgo_dir = paste0(cache_path, 'ssurgo/'),
+      planting_date = '1-Apr',
+      cultivar = 'A_80',
+      base_file = "SimulateBasic_-90_34.apsimx",
+      src.dir = cache_path,
+      only_dl_data = TRUE
+    )
+  )
+  
+  # Work with Soil Data ----
+  replace_soil_in_json(
+    input_json_file = jsonlite::read_json(paste0(cache_path, factorial_file)),
+    replacement_soil = soils_list[[soils_i]],
+    input_file_type = input_file_type,
+    output_dir = cache_path
+  )  
+  
+  # Work with Weather Data ----
+  ith_met_path <- paste0(cache_path, 
+                         'power/', 
+                         paste0(as.character(ith_lon),'_', 
+                                as.character(ith_lat),'_', 
+                                as.character(ith_year_start),'-', 
+                                as.character('01-01'),'_', 
+                                as.character(ith_year_end),'-', 
+                                as.character('12-31'),
+                                '.met'))
+  
+  met_data_ready <- file.exists(ith_met_path)
+  if(met_data_ready){
+    
+    factorial_file_text <- read_file(paste0(cache_path, 'temp.apsimx'))
+    factorial_file_text <- unlist(str_split(factorial_file_text, '\\n'))
+    
+    ith_met_path <- str_split(ith_met_path, pattern = '/')[[1]]
+    replace_met <- ith_met_path[length(ith_met_path)]
+    
+    # Now I'll pull out the met file name instead of passing it in.
+    ith_expect_met <- factorial_file_text[str_detect(
+      string = factorial_file_text, '"FileName":.+\\.met')]
+    ith_expect_met <- str_extract(ith_expect_met, '[\\w-.]+\\.met')
+    
+    mask <- str_detect(string = factorial_file_text, ith_expect_met)
+    relevant_line <- factorial_file_text[mask]
+    
+    met_lines_match <- (length(relevant_line) == 1)
+    if(met_lines_match){
+      replacement_line <- str_replace(relevant_line, pattern = ith_expect_met, replacement = replace_met)
+      factorial_file_text[mask] <- replacement_line
+      factorial_file_text <- paste(factorial_file_text, collapse = '\n')
+      write_file(factorial_file_text, 
+                 paste0(cache_path, 'temp.apsimx'))  
+    }
+  }
+  
+  # If the tests pass, then run the file ----
+  if((met_data_ready & 
+      met_lines_match)){
+    
+    res <- apsimx(
+      file = 'temp.apsimx',
+      src.dir = cache_path,
+      value = "report")
+    
+  }  else {
+    res = data.frame()
+  }
+  # if there was an issue, return an empty df
+  if(nrow(res) == 0){
+    res <- data.frame(
+      CheckpointID = NA, SimulationID = NA, Experiment = NA, FolderName = NA, 
+      SowDate = NA, Genotype = NA, Zone = NA, Clock.Today = NA, 
+      Maize.AboveGround.Wt = NA, Maize.LAI = NA, yield_Kgha = NA, Date = NA
+    )
+  # and also copy the file so that I can audit it and figure out why it did not work.
+    ensure_dir_path_exists(paste0(cache_path, 'apsimx_audits/'))
+    file.copy(paste0(cache_path, 'temp.apsimx'),
+              paste0(cache_path, 'apsimx_audits/',  paste(c(ith_lon, ith_lat, ith_year_start, ith_year_end, soils_i, 'temp.apsimx'), collapse = '__' )))
+  }
+  
+  # delete the temp files
+  if('temp.apsimx' %in% list.files(cache_path)){
+  unlink(paste0(cache_path, 'temp.apsimx'))    
+  }
+  if('temp.db' %in% list.files(cache_path)){
+  unlink(paste0(cache_path, 'temp.db'))    
+  }
+  
+  return(cbind(data.frame(ith_lon, ith_lat, ith_year_start, ith_year_end, soils_i, factorial_file), res))
+}
+```
+
+
+
+```{r}
+wrapper_apsimx_factorial_temp <- function(
+    ith_lon = -86.52960,
+    ith_lat = 34.72952,
+    cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    factorial_file = 'SimulateFactorial_Tiny.apsimx',
+    input_file_type = 'factorial',
+    soils_i = 1,
+    ith_year_start = '1984',
+    ith_year_end = '2022',
+    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/factorial_exps/", # This is for the output not the inputs.
+    write_or_return_result = 'write'
+){
+  # Same approach as `run_and_store_apsimx_for_gps` but for a factorial experiment
+  ensure_dir_path_exists(cache_path)
+  ensure_dir_path_exists(save_path)
+  
+  save_name <- paste0(c(as.character(ith_lon), 
+                        as.character(ith_lat), 
+                        as.character(ith_year_start), 
+                        as.character(ith_year_end),
+                        as.character(soils_i),
+                        str_replace(factorial_file, '\\.apsimx$', '')
+  ), collapse = '__')
+  save_name <- paste0(save_name, '.csv')
+
+  print(save_name)
+  if(!file.exists(paste0(save_path,save_name))){
+    res <- modify_and_run_apsimx_temp(
+      ith_lon = ith_lon,
+      ith_lat = ith_lat,
+      cache_path = cache_path,
+      factorial_file  = factorial_file,
+      input_file_type = input_file_type,
+      soils_i = soils_i,
+      ith_year_start = ith_year_start,
+      ith_year_end   = ith_year_end
+    )
+    
+    if (write_or_return_result == 'return'){
+      return(res)
+    } else {
+      write.csv(res, paste0(save_path,save_name))
+    }
+  }
+}
+```
+
+
+
+
+
+
+
+# run on all g2f locations
+
+```{r points to use}
+gps <- read.csv('../inst/extdata/gps_coords.csv')
+gps <- gps[!stringr::str_detect(gps[, 'Env'], '^ONH.+'), ]
+gps <- gps[!stringr::str_detect(gps[, 'Env'], '^GEH.+'), ]
+
+gps <- gps %>% 
+  rename(lat = Latitude_of_Field,
+         lon = Longitude_of_Field) %>% 
+  select(lat, lon) %>% 
+  distinct()
+
+# so that this can be merged with the below I'm adding in `soil_i_or_is` here.
+gps['soil_i_or_is'] <- -1
+for(i in seq(1, nrow(gps))){
+  gps[i, 'soil_i_or_is'] <- closest_soils_list_entry(ith_lon = gps[i, 'lon'],
+                                                     ith_lat = gps[i, 'lat'])  
+}
+
+
+gps <- gps %>% 
+  rename(Longitude = lon,
+         Latitude = lat) %>% 
+  mutate(soil_i_or_is = as.character(soil_i_or_is))
+
+gps_backup <- gps 
+```
+
+
+
+## Repeat for grid over usa
+### Load GPS Data
+```{r}
+# if(file.exists(paste0(cache_path, 'gps_grid_soil_match.csv'))){
+  gps <- read.csv(paste0(cache_path, 'gps_grid_soil_match.csv'))  
+# }else{
+#   gps <- read.csv('../data/00.01_setup_USA_env_gps_grid/gps_grid.csv') %>% rename(Latitude = lat, Longitude = lon)
+#   
+#   gps['MinKm'] <- -1
+#   gps['soil_i_or_is'] <- -1
+#   
+#   # Would be faster to compute vornoi regions and then check which a coordinate pair fell in but this is fast enough.
+#   for(i in seq(1, nrow(gps))){
+#     soil_temp <- soils_df[, c("Longitude", "Latitude")]
+#     soil_temp[is.na(soil_temp$Longitude), "Longitude"] <- 0
+#     soil_temp[is.na(soil_temp$Latitude), "Latitude"] <- 0
+#     
+#     dists <- geodist(
+#       rbind(gps[i, c("Longitude", "Latitude")],
+#             soil_temp[, c("Longitude", "Latitude")]), 
+#       measure = 'geodesic'
+#     )
+#     min_dist <- min(dists[1, 2:ncol(dists)], na.rm = TRUE)
+#     min_i_or_is <- c(1:(ncol(dists)-1))[dists[1, 2:ncol(dists)] == min_dist]
+#     min_i_or_is <- paste(as.character(min_i_or_is), collapse = '-')
+#     
+#     gps[i, 'MinKm'] <- min_dist/1000
+#     gps[i, 'soil_i_or_is'] <- min_i_or_is
+#   }
+#   write.csv(gps, paste0(cache_path, 'gps_grid_soil_match.csv'))
+# }
+
+# gps %>% 
+#   ggplot(aes(x = Longitude, y = Latitude, color = MinKm))+
+#   coord_cartesian(xlim = c(-125, -65), ylim = c(25, 50))+
+#   geom_point()+
+#   theme(legend.position = '')
+# 
+# gps %>% 
+#   ggplot(aes(x = MinKm))+
+#   geom_density()
+# 
+# gps %>% 
+#   ggplot(aes(x = Longitude, y = Latitude, color = MinKm<100))+
+#   coord_cartesian(xlim = c(-125, -65), ylim = c(25, 50))+
+#   geom_point()+
+#   theme(legend.position = '')
+# 
+# gps %>% 
+#   ggplot(aes(x = Longitude, y = Latitude, color = soil_i_or_is))+
+#   geom_point()+
+#   coord_cartesian(xlim = c(-125, -65), ylim = c(25, 50))+
+#   theme(legend.position = '')
+# 
+# gps %>% filter(MinKm<50) %>% 
+#   ggplot(aes(x = Longitude, y = Latitude, color = soil_i_or_is))+
+#   geom_point()+
+#   coord_cartesian(xlim = c(-125, -65), ylim = c(25, 50))+
+#   theme(legend.position = '')
+
+gps <- gps %>% filter(MinKm<25)
+
+gps <- full_join(gps, gps_backup)
+```
+
+
+```{r}
+# Functions 
+
+# for now I'm going to just use these parameters from the generic 
+sample_default_ranges <- function(){
+  include_params = list(
+    "[Grain].MaximumGrainsPerCob.FixedValue" =              sample(360:850, 1),
+    "[Grain].MaximumPotentialGrainSize.FixedValue" =        runif(1,  0.217, 0.375),
+    "[Phenology].FlagLeafToFlowering.Target.FixedValue" =   sample(1:101, 1),
+    "[Phenology].FloweringToGrainFilling.Target.FixedValue" = sample(120:170, 1),
+    "[Phenology].GrainFilling.Target.FixedValue" =          sample(420:900, 1),
+    "[Phenology].Juvenile.Target.FixedValue" =              sample(100:290, 1),
+    "[Phenology].Maturing.Target.FixedValue" =              sample(1:50, 1),
+    "[Phenology].MaturityToHarvestRipe.Target.FixedValue" = sample(1:100, 1),
+    "[Phenology].Photosensitive.Target.XYPairs.X__1" =      runif(1, 0, 0),
+    "[Phenology].Photosensitive.Target.XYPairs.X__2" =      runif(1, 12.5, 12.5),
+    "[Phenology].Photosensitive.Target.XYPairs.X__3" =      runif(1, 24, 24),
+    "[Phenology].Photosensitive.Target.XYPairs.Y__1" =      runif(1, 0, 0),
+    "[Phenology].Photosensitive.Target.XYPairs.Y__2" =      runif(1, 0, 0),
+    "[Phenology].Photosensitive.Target.XYPairs.Y__3" =      runif(1, 0, 472),
+    "[Rachis].DMDemands.Structural.DMDemandFunction.MaximumOrganWt.FixedValue" = sample(14:36, 1)
+  )
+  return(include_params)
+}
+
+# input_params <- sample_default_ranges()
+
+input_params_to_df <- function(input_params){
+  temp <- data.frame(unlist(input_params))
+  return(data.frame(
+    param = rownames(temp),
+           value = temp$unlist.input_params.))
+}
+
+
+# input_param_df <- input_params_to_df(input_params = sample_default_ranges())
+
+
+input_params_df_to_apsimx_culitvar_list <- function(input_params_df){
+  expected_params <- c(
+    "[Grain].MaximumGrainsPerCob.FixedValue",
+    "[Grain].MaximumPotentialGrainSize.FixedValue",
+    "[Phenology].FlagLeafToFlowering.Target.FixedValue",
+    "[Phenology].FloweringToGrainFilling.Target.FixedValue",
+    "[Phenology].GrainFilling.Target.FixedValue",
+    "[Phenology].Juvenile.Target.FixedValue",
+    "[Phenology].Maturing.Target.FixedValue",
+    "[Phenology].MaturityToHarvestRipe.Target.FixedValue",
+    "[Phenology].Photosensitive.Target.XYPairs.X", # | These two should match entries with the suffixes __1, __2, __3  
+    "[Phenology].Photosensitive.Target.XYPairs.Y", # |
+    "[Rachis].DMDemands.Structural.DMDemandFunction.MaximumOrganWt.FixedValue"
+  )
+  out_list <- list()
+  # expected_param = expected_params[10]
+  
+  for (expected_param in expected_params){
+    mask <- str_detect(input_params_df[['param']], 
+                       # have to add in escapes so the regex works
+                       str_replace_all(str_replace_all(
+                         expected_param, "\\[", "\\\\["), "\\]", "\\\\]")
+    )
+    
+    
+    if((expected_param %in% c( 
+      "[Grain].MaximumPotentialGrainSize.FixedValue",
+      "[Phenology].Photosensitive.Target.XYPairs.X",  
+      "[Phenology].Photosensitive.Target.XYPairs.Y"))){
+      # float entries
+      out <- paste(c(expected_param, ' = ', 
+                     paste(input_params_df[mask, 'value'], collapse = ', ')), 
+                   collapse = '')
+      
+    } else {
+      # int entries
+      out <- paste(c(expected_param, ' = ',
+                     paste(round(input_params_df[mask, 'value']), collapse = ', ')), 
+                   collapse = '')  
+    }
+    out_list[(1+length(out_list))] <- out
+  }
+  return(out_list)
+}
+  
+# input_params_df_to_apsimx_culitvar_list(
+#   input_params_df = input_params_to_df(
+#     input_params = sample_default_ranges()))
+
+
+setup_culitvar_params_vs_baseline <- function(
+    cultivar_lol = list(list(""),
+                        list("[Phenology].Juvenile.Target.FixedValue = 212"),
+                        list("[Phenology].Juvenile.Target.FixedValue = 213")),
+    base_file = "SimulateFactorialDailyCultivars_-90_34.apsimx",
+    src.dir = './data/00.07_apsimx_cultivar_dynamic_test/',
+    save_file = "CultivarTemp.apsimx"){
+  M <- jsonlite::read_json(paste0(src.dir, base_file))
+  
+  # this is how many blanks I've set up to allow for filling in params.
+  # M$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[5]]$Children %>% length()
+  
+  # need code to fill each of these.
+  for(i in seq_along(cultivar_lol)){
+    i_offset <- i
+    # i_offset <- 1+i # must be offset to keep Cultivar as having default values
+    M$Children[[2]]$Children[[1]]$Children[[2]]$Children[[5]]$Children[[5]]$Children[[i_offset]]$Command <- cultivar_lol[[i]]
+  }
+  
+  # this is the string that controls what cultivars will be run. 
+  M$Children[[2]]$Children[[1]]$Children[[1]]$Children[[1]]$Children[[2]]$Specification <- paste(
+    c('[Field].Sow on a fixed date.Script.CultivarName = Cultivar',
+      paste0('Cultivar', seq(1, (length(cultivar_lol)-1)))), collapse = ', '
+  )
+  
+  # unlink()
+  for(e in paste0(str_replace(save_file, '.apsimx', ''), c('.apsimx', '.apsimx.bak', '.db')) ){
+    if(file.exists(paste0(src.dir, e))){
+      unlink(paste0(src.dir, e))  
+    }
+  }
+  
+  jsonlite::write_json(M, 
+                       paste0(src.dir, save_file), 
+                       pretty = TRUE, 
+                       digits = NA, auto_unbox = TRUE, null = "null", 
+                       na = "null")
+}
+```
+
+
+```{r}
+# # demo
+# param_df_list <- map(1:25, function(i){
+#   return(input_params_to_df(input_params = sample_default_ranges()))
+# })
+# 
+# # setup a wide version so that the parameters can be merged into the results df
+# temp_cultivar_df <- do.call(rbind, map(seq_along(param_df_list), function(i){
+#   if(i ==1){
+#     ith_genotype = 'Cultivar'
+#   } else {
+#     ith_genotype = paste0('Cultivar', (i-1))
+#   }
+#   return(mutate(param_df_list[[i]], Genotype = ith_genotype))
+# }))
+# temp_cultivar_df <- temp_cultivar_df %>% pivot_wider(names_from = param, values_from = value)
+# 
+# # set up list of lists with cultivar specification
+# cultivar_lol <- map(param_df_list, function(e){
+#   return(input_params_df_to_apsimx_culitvar_list(
+#     input_params_df = e))
+# })
+# 
+# # this should happen repeatedly for multiple locations
+# # to get the base cultivar the list of lists should contain an empty string like so:
+# cultivar_lol[[1]] <- list("")
+# # and should overwrite with a value so I know it's the generic cultivar. Generic cultivars can be pulled from the grid of results too.
+# temp_cultivar_df[temp_cultivar_df$Genotype == 'Cultivar',
+#                  names(temp_cultivar_df)[!(names(temp_cultivar_df) %in% c('Genotype'))]
+#                  ] <- -1
+# setup_culitvar_params_vs_baseline(cultivar_lol = cultivar_lol,
+#                                   base_file = "SimulateFactorialDailyCustomCultivar.apsimx",
+#                                   src.dir = '../data/00.06_apsimx_sim_factorial_gps_grid/',
+#                                   save_file = "CultivarTemp.apsimx")
+# 
+# res <- apsimx(
+#     file = 'CultivarTemp.apsimx',
+#     src.dir = '../data/00.06_apsimx_sim_factorial_gps_grid/',
+#     value = "report")
+# 
+# # res <- full_join(res, temp_cultivar_df) %>% select(-Genotype)
+```
+for 100 cultivars: ~14 min multithreaded, > 16 singlethreaded ~ 160 GB ram
+for 25 cultivars: ~7 minutes total. 
+
+
+ADAPT THIS
+```{r}
+tictoc::tic('outer')
+generate_per_sim = 25 #25 # can go up to 100 per time.
+
+db_path <- paste0(cache_path, 'cultivar_sim_exps/sim_cultivar.sqlite')
+## Cleanup ===================================================================
+temp_files = list.files("../data/00.06_apsimx_sim_factorial_gps_grid/")
+for(temp_file in temp_files[str_detect(temp_files, 'temp\\..+')]){
+  unlink(paste0("../data/00.06_apsimx_sim_factorial_gps_grid/", temp_file))
+}
+## Cultivar Setup ============================================================
+# Randomly sample a Cultivar and save it as "CultivarTemp.apsimx"
+param_df_list <- map(1:generate_per_sim, function(i){ 
+  return(input_params_to_df(input_params = sample_default_ranges()))
+})
+# setup a wide version so that the parameters can be merged into the results df
+temp_cultivar_df <- do.call(rbind, map(seq_along(param_df_list), function(i){
+  return(mutate(param_df_list[[i]], Genotype = paste0('Cultivar', i)))
+}))
+temp_cultivar_df <- temp_cultivar_df %>% pivot_wider(names_from = param, values_from = value)
+names(temp_cultivar_df) <- str_replace(str_replace(names(temp_cultivar_df), '\\[', ''), '\\]', '')
+
+# set up list of lists with cultivar specification
+cultivar_lol <- map(param_df_list, function(e){
+  return(input_params_df_to_apsimx_culitvar_list(
+    input_params_df = e))  
+})
+
+# this should happen repeatedly for multiple locations
+setup_culitvar_params_vs_baseline(cultivar_lol = cultivar_lol,
+                                  base_file = "SimulateFactorialDailyCustomCultivar.apsimx",
+                                  src.dir = '../data/00.06_apsimx_sim_factorial_gps_grid/',
+                                  save_file = "CultivarTemp.apsimx")
+
+# Figure out cultivar uids and add them to the Genotypes table
+lowest_cultivar_uid <- 0
+mydb <- dbConnect(RSQLite::SQLite(),db_path)
+cultivars_on_record <- dbReadTable(mydb, 'Genotypes')[, 'Genotype']
+if (TRUE %in% str_detect(cultivars_on_record, '^Cultivar')){
+  cultivars_on_record <- cultivars_on_record[str_detect(cultivars_on_record, '^Cultivar')]
+  lowest_cultivar_uid <- max(as.numeric(str_replace(cultivars_on_record, 'Cultivar', '')))
+  # increment labels
+  temp_cultivar_df$Genotype <- paste(
+    'Cultivar', 
+    as.character(as.numeric(str_replace(temp_cultivar_df$Genotype, 'Cultivar', ''))+lowest_cultivar_uid), sep = '')
+}
+dbWriteTable(mydb, 'Genotypes', temp_cultivar_df, append = TRUE)
+dbDisconnect(mydb)
+
+## Iterate over gps locations ================================================
+for(i in seq(1, nrow(gps)
+             )){ 
+  tictoc::tic('inner')
+  print(paste0(as.character(i), '/',as.character(nrow(gps))))
+  ## Iterate over allowed soils ================================================
+  soil_i_or_is <- gps[i, 'soil_i_or_is']
+  for(soils_i in unlist(str_split(soil_i_or_is, '-'))){
+    soils_i <- as.numeric(soils_i)
+    
+    ### Replaces the wrapper function 
+    # cache_path = "../data/00.06_apsimx_sim_factorial_gps_grid/",
+    save_path = "../data/00.06_apsimx_sim_factorial_gps_grid/cultivar_sim_exps/" # This is for the output not the inputs.
+    factorial_file = 'CultivarTemp.apsimx'
+    input_file_type = 'factorial'
+    # soils_i = soils_i
+    ith_lon = gps[i, 'Longitude']
+    ith_lat = gps[i, 'Latitude']
+    ith_year_start = '1984'
+    ith_year_end = '2022'    
+    # Same approach as `run_and_store_apsimx_for_gps` but for a factorial experiment
+    ensure_dir_path_exists(cache_path)
+    ensure_dir_path_exists(save_path)
+    
+    # print(i)
+    # break
+    res <- ''
+    try(
+      res <- modify_and_run_apsimx_temp(
+        ith_lon = ith_lon,
+        ith_lat = ith_lat,
+        cache_path = cache_path,
+        factorial_file  = factorial_file,
+        input_file_type = input_file_type,
+        soils_i = soils_i,
+        ith_year_start = ith_year_start,
+        ith_year_end   = ith_year_end
+      )
+    )
+    ## Reduce the dataset size and add to database. ==========================
+    if(!(typeof(res) == "character")){
+      M <- res
+      # Drop columns that aren't needed
+      res_select <- M[, c(
+        # Indepenent Variables
+        'ith_lon', 'ith_lat', 'soils_i', 'SowDate', 'Genotype', 'Date',
+        # Dependent Variables
+        'Maize.AboveGround.Wt', 'Maize.LAI', 'yield_Kgha'
+      )] |> 
+        rename(Longitude = ith_lon, Latitude = ith_lat, SoilIdx = soils_i)
+      
+      M <- res_select
+      # Drop rows without data
+      
+      # can get a tiny performance benefit from looking at the sum vs 0 instead of looking at each col. 
+      mask <- (M$Maize.AboveGround.Wt + M$Maize.LAI + M$Maize.AboveGround.Wt) == 0
+      M <- M[!mask, ]
+      # reduce down the genotype name's size
+      # M$Genotype <- str_replace(M$Genotype, '.+ = ', '')
+      
+      # Split up tables
+      ## Attributes ====
+      res_ids <- M |> select(-Maize.AboveGround.Wt, -Maize.LAI, -yield_Kgha, -Date) |> distinct()
+      # add a uid col
+      res_ids['FactorialUID'] = NA
+      # need to look at database to find lowest unused uid.
+      
+      lowest_uid <- 0
+      # replace if there's pre-recorded data.
+      if(!file.exists(db_path)){
+        # pass - no database
+      } else {
+        mydb <- dbConnect(RSQLite::SQLite(), db_path)
+        if(!(DBI::dbExistsTable(mydb, 'Ids'))){
+          # pass - no data
+        } else {
+          stored_ids <- dbReadTable(mydb, 'Ids')
+          dbDisconnect(mydb)
+          # check that there are no matching factorial combinations in the database
+          res_ids <- left_join(res_ids, stored_ids)
+          # don't allow updating by default.
+          res_ids <- res_ids[is.na(res_ids$FactorialUID), ]
+          lowest_uid <- max(stored_ids$FactorialUID)
+        }
+      }
+      # add new uids
+      res_ids['FactorialUID'] <- lowest_uid + seq(1, nrow(res_ids['FactorialUID']))
+      res_ids$FactorialUID <- as.integer(res_ids$FactorialUID)
+      
+      ## Datasets ====
+      res_dvs <- left_join(distinct(M), res_ids) |> 
+        select(-Longitude, -Latitude, -SoilIdx, -SowDate, -Genotype)
+      # convert to date
+      res_dvs$Date <- as.numeric(lubridate::as_date(res_dvs$Date))
+      # now these tables are ready to insert. Could be further reduced by having a unique table for each genotype.
+      
+      # _NOW_ turn cultivar into uid
+      res_ids[res_ids$Genotype == 'Cultivar', 'Genotype'] <- 'Cultivar0'
+      res_ids$Genotype <- as.numeric(str_extract(res_ids$Genotype, '\\d+$'))
+      res_ids$Genotype <- res_ids$Genotype + lowest_cultivar_uid  + 1 # have to add 1 because Cultivar0 was the first cultivar
+      res_ids$Genotype <- paste('Cultivar', as.character(res_ids$Genotype), sep = '')
+      
+      ## cleaning up the cultivar parameter df to match 
+      mydb <- dbConnect(RSQLite::SQLite(),db_path)
+      dbWriteTable(mydb, 'Ids', res_ids, append = TRUE)
+      dbWriteTable(mydb, 'Results', res_dvs, append = TRUE)
+      dbDisconnect(mydb)
+    }
+    tictoc::toc()
+  }
+}
+tictoc::toc()
+
+```
+
+
+
+```{r}
+# mydb <- dbConnect(RSQLite::SQLite(),db_path)
+# xg = dbReadTable(mydb, 'Genotypes')
+# xi = dbReadTable(mydb, 'Ids')
+# xr = dbReadTable(mydb, 'Results')
+# dbDisconnect(mydb)
+# 
+# xg <- left_join(xi, xg)
+# xr <- xr[xr$FactorialUID %in% unique(xg[, 'FactorialUID']), ]
+# 
+# 
+# xr %>% head
+# 
+# xr$Date <- lubridate::as_date(xr$Date)
+# 
+# xr$YearStart <- paste(str_remove(as.character(xr$Date), '-\\d+-\\d+$'), '-01-01', sep = '')
+# xr$YearStart <- lubridate::as_date(xr$YearStart)
+# xr$DOY <- xr$Date - xr$YearStart
+# 
+# xrsm <- xr %>% 
+#   select(FactorialUID, yield_Kgha) %>% 
+#   group_by(FactorialUID) %>% 
+#   summarise(yield_Kgha = max(yield_Kgha, na.rm = TRUE))
+# 
+# ggplot(xrsm, aes(yield_Kgha))+
+#   geom_density()
+# 
+# 
+# ggplot(left_join(xrsm, xg), aes(Longitude, Latitude, color = yield_Kgha))+
+#   geom_point()
+
+```
